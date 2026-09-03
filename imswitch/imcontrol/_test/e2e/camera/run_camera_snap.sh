@@ -9,13 +9,19 @@
 set -euo pipefail
 
 PI="${PI_HOST:-pi@192.168.178.124}"
+
 CONTAINER="${IMSWITCH_CONTAINER:-imswitch-server-1}"
+
 BASE="${IMSWITCH_URL:-http://192.168.178.124:8000/imswitch}"
+
 TEST="$(cd "$(dirname "$0")" && pwd)/test_camera_snap_http.py"
+
+DETECTOR="${IMSWITCH_DETECTOR:-RPiCam}"
+
 
 if [ "${1:-}" = "--curl" ]; then
     curl -sS -o /tmp/snap.png -w 'HTTP %{http_code}  %{content_type}  %{size_download} bytes\n' \
-        "$BASE/api/RecordingController/snapNumpyToFastAPI?detectorName=RPiCam&resizeFactor=0.1"
+        "$BASE/api/RecordingController/snapNumpyToFastAPI?detectorName=$DETECTOR&resizeFactor=0.1"
     echo "saved to /tmp/snap.png"
     exit 0
 fi
