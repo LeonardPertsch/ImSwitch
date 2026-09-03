@@ -1,28 +1,113 @@
+```bash
 #!/usr/bin/env bash
-# Run the laser test on the Pi, inside the imswitch container.
-# One SSH connection, so one password prompt.
+
+# Run the laser hardware tests on a remote machine inside the ImSwitch container.
 #
-#   ./run_laser_test.sh          # pytest
-#   ./run_laser_test.sh --wire   # show the JSON going over the wire to the ESP32
+# The Python tests discover all lasers/LEDs from the active ImSwitch setup and
+# create one separate pytest test case for every reported laser.
 #
-# Override with PI_HOST / IMSWITCH_CONTAINER.
+# Usage:
+#
+#   ./run_laser_test.sh
+#       Run all laser hardware tests.
+#
+#   ./run_laser_test.sh --wire
+#       Run the optional serial diagnostic script that shows the JSON sent
+#       towards the ESP32.
+#
+# Configuration can be overridden through environment variables:
+#
+#   PI_HOST
+#       SSH target of the machine running the ImSwitch container.
+#
+#   IMSWITCH_CONTAINER
+#       Name of the Docker container running ImSwitch.
+#
+#   IMSWITCH_URL
+#       ImSwitch API URL as seen from inside the container.
+#
+#   PYTHON_BIN
+#       Python executable inside the container.
+#
+#   REMOTE_TEST_DIR
+#       Temporary directory used inside the container for the tests.
+#
+# Example:
+#
+#   PI_HOST=pi@192.168.1.20 \
+#   IMSWITCH_CONTAINER=imswitch-server-1 \
+#   IMSWITCH_URL=http://localhost:8001 \
+#   ./run_laser_test.sh
+
 set -euo pipefail
 
-PI="${PI_HOST:-pi@192.168.178.124}"
-CONTAINER="${IMSWITCH_CONTAINER:-imswitch-server-1}"
-DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# --wire runs the diagnostic script instead; it needs the serial port to itself,
-# so it only works while ImSwitch is not connected to the ESP32.
+# Remote machine running Docker.
+PI="${PI_HOST:-pi@192.168.178.124}"
+
+# Docker container running ImSwitch.
+CONTAINER="${IMSWITCH_CONTAINER:-imswitch-server-1}"
+
+# ImSwitch URL from the perspective of the container.
+IMSWITCH_URL="${IMSWITCH_URL:-http://localhost:8001}"
+
+# Python executable inside the ImSwitch container.
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+
+# Temporary location used inside the container.
+REMOTE_TEST_DIR="${REMOTE_TEST_DIR:-/tmp/laser_tests}"
+
+# Directory containing this script, the pytest files and the optional
+# show_wire_traffic.py diagnostic script.
+LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+
+# Run the serial diagnostic instead of pytest.
+#
+# This script talks directly to the serial connection used by the ESP32.
+# Therefore it should only be used when ImSwitch itself is not currently
+# occupying that serial connection.
 if [ "${1:-}" = "--wire" ]; then
-    ssh "$PI" "docker exec -i $CONTAINER python3 -" < "$DIR/show_wire_traffic.py"
+    ssh "$PI" \
+        "docker exec -i '$CONTAINER' '$PYTHON_BIN' -" \
+        < "$LOCAL_DIR/show_wire_traffic.py"
+
     exit 0
 fi
 
-tar --no-xattrs -czf - -C "$DIR" . | ssh "$PI" "
-    cat > /tmp/laser.tgz &&
-    docker cp /tmp/laser.tgz $CONTAINER:/tmp/laser.tgz >/dev/null &&
-    docker exec $CONTAINER sh -c 'rm -rf /tmp/laser && mkdir -p /tmp/laser && tar xzf /tmp/laser.tgz -C /tmp/laser' &&
-    docker exec -e IMSWITCH_URL=http://localhost:8001 $CONTAINER python3 -m pytest /tmp/laser \
-        -v -ra -p no:arkitekt_next -p no:cacheprovider -o markers=hardware
+
+# Pack the local laser-test directory and send it to the remote machine through
+# the existing SSH connection.
+#
+# The archive is then copied into the ImSwitch container and extracted into a
+# clean temporary directory. This makes the runner independent of the local
+# absolute path of the repository.
+tar --no-xattrs -czf - -C "$LOCAL_DIR" . |
+ssh "$PI" "
+    set -e
+
+    cat > /tmp/laser_tests.tgz
+
+    docker cp \
+        /tmp/laser_tests.tgz \
+        '$CONTAINER:/tmp/laser_tests.tgz' \
+        >/dev/null
+
+    docker exec '$CONTAINER' sh -c \
+        'rm -rf \"$REMOTE_TEST_DIR\" &&
+         mkdir -p \"$REMOTE_TEST_DIR\" &&
+         tar xzf /tmp/laser_tests.tgz -C \"$REMOTE_TEST_DIR\"'
+
+    docker exec \
+        -e IMSWITCH_URL='$IMSWITCH_URL' \
+        '$CONTAINER' \
+        '$PYTHON_BIN' -m pytest \
+        '$REMOTE_TEST_DIR' \
+        -v \
+        -ra \
+        -m hardware \
+        -p no:arkitekt_next \
+        -p no:cacheprovider \
+        -o 'markers=hardware: tests requiring real microscope hardware'
 "
+```

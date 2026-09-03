@@ -1,113 +1,138 @@
-"""The one test that cannot pass without real photons.
 
-Every other test here reads back state that software set: the laser test gets an
-ImSwitch attribute assigned a moment earlier, and the camera test proves a PNG
-arrived but says nothing about what is in it. This one switches the LED on,
-photographs the result, and asserts the sensor actually got brighter.
+"""Check that every configured light source is visible to the camera."""
 
-    LED off -> snap -> mean brightness   (dark)
-    LED on  -> snap -> mean brightness   (bright)
-    assert bright / dark >= PHOTON_MIN_RATIO
-
-Everything goes through the ImSwitch HTTP API, so the LED must be mapped in the
-active setup and the camera must be able to see it. Measured on this rig:
-dark 0.02, bright 115.47 - a ratio of roughly 7500.
-"""
 import io
 import os
 import time
 
 import pytest
 import requests
+from PIL import Image, ImageChops, ImageStat
 
-try:
-    from PIL import Image, ImageStat
-except ImportError:
-    Image = None
 
-# Inside the imswitch container ImSwitch listens on :8001; from outside it is
-# http://192.168.178.124:8000/imswitch, where caddy adds the /imswitch prefix.
-BASE_URL = os.environ.get("IMSWITCH_URL", "http://localhost:8000/imswitch")
-
-LASER_NAME = os.environ.get("IMSWITCH_LASER")        # default: first one reported
-DETECTOR_NAME = os.environ.get("IMSWITCH_DETECTOR")  # default: first one reported
+BASE_URL = os.environ.get("IMSWITCH_URL", "http://localhost:8001")
+DETECTOR = os.environ.get("IMSWITCH_DETECTOR")
 LASER_VALUE = int(os.environ.get("UC2_LASER_VALUE", "1000"))
-MIN_RATIO = float(os.environ.get("PHOTON_MIN_RATIO", "5.0"))
+MIN_CHANGE = float(os.environ.get("PHOTON_MIN_DELTA", "1.5"))
 
-# How long to let the LED settle before photographing it.
-SETTLE_SECONDS = 1.0
-
-# A quarter of the sensor resolution is plenty for a brightness average.
-RESIZE_FACTOR = 0.25
+SETTLE = 1.0
+RESIZE = 0.25
 
 
-# GET an ImSwitch API endpoint, fail on anything but 200, return the parsed JSON.
-def get_json(controller, method, **params):
+# Call an ImSwitch API endpoint and return JSON.
+def api(controller, method, **params):
     response = requests.get(
-        f"{BASE_URL}/api/{controller}/{method}", params=params, timeout=10
-    )
-    assert response.status_code == 200, f"{method} -> {response.status_code}: {response.text}"
-    return response.json()
-
-
-# Switch the LED on at LASER_VALUE, or off, then wait for it to settle.
-def set_led(laser_name, on):
-    get_json("LaserController", "setLaserValue",
-             laserName=laser_name, value=LASER_VALUE if on else 0)
-    get_json("LaserController", "setLaserActive", laserName=laser_name, active=on)
-    time.sleep(SETTLE_SECONDS)
-
-
-# Photograph the current scene and return its mean brightness (0-255).
-def mean_brightness(detector_name):
-    response = requests.get(
-        f"{BASE_URL}/api/RecordingController/snapNumpyToFastAPI",
-        params={"detectorName": detector_name, "resizeFactor": RESIZE_FACTOR},
+        f"{BASE_URL}/api/{controller}/{method}",
+        params=params,
         timeout=30,
     )
     assert response.status_code == 200, response.text
-    greyscale = Image.open(io.BytesIO(response.content)).convert("L")
-    return ImageStat.Stat(greyscale).mean[0]
+    return response.json()
 
 
-# Look up the LED and the camera, skipping the test if either is missing.
-@pytest.fixture
-def led_and_camera():
-    if Image is None:
-        pytest.skip("Pillow not installed")
+# Get all configured light sources.
+def get_lights():
     try:
-        lasers = get_json("LaserController", "getLaserNames")
-        detectors = get_json("SettingsController", "getDetectorNames")
-    except requests.RequestException as exc:
-        pytest.skip(f"ImSwitch not reachable at {BASE_URL}: {exc}")
+        return api("LaserController", "getLaserNames")
+    except requests.RequestException:
+        return []
 
-    if not lasers:
-        pytest.skip("active setup has no lasers/LEDs - has ImSwitch been restarted?")
+
+LIGHTS = get_lights()
+
+
+# Switch one light source on or off.
+def set_light(name, on):
+    api(
+        "LaserController",
+        "setLaserValue",
+        laserName=name,
+        value=LASER_VALUE if on else 0,
+    )
+    api(
+        "LaserController",
+        "setLaserActive",
+        laserName=name,
+        active=on,
+    )
+    time.sleep(SETTLE)
+
+
+# Switch every configured light source off.
+def all_lights_off():
+    for name in LIGHTS:
+        set_light(name, False)
+
+
+# Take one frame and reject empty camera frames.
+def take_image(detector):
+    response = requests.get(
+        f"{BASE_URL}/api/RecordingController/snapNumpyToFastAPI",
+        params={"detectorName": detector, "resizeFactor": RESIZE},
+        timeout=30,
+    )
+    assert response.status_code == 200, response.text
+
+    image = Image.open(io.BytesIO(response.content)).convert("L")
+    assert image.getextrema()[1] > 0, (
+        "camera returned an all-black frame; acquisition may not be running"
+    )
+    return image
+
+
+# Start camera acquisition for the photon tests.
+@pytest.fixture(scope="module", autouse=True)
+def camera_acquisition():
+    api("ViewController", "setLiveViewActive", active=True)
+    time.sleep(1)
+
+    yield
+
+    all_lights_off()
+    api("ViewController", "setLiveViewActive", active=False)
+
+
+# Use the requested detector or the first configured one.
+@pytest.fixture(scope="module")
+def detector_name():
+    detectors = api("SettingsController", "getDetectorNames")
+
     if not detectors:
-        pytest.skip("active setup has no detectors")
+        pytest.skip("no detector configured")
+    if DETECTOR and DETECTOR not in detectors:
+        pytest.skip(f"detector {DETECTOR!r} not found")
 
-    laser_name = LASER_NAME or lasers[0]
-    yield laser_name, DETECTOR_NAME or detectors[0]
-    set_led(laser_name, on=False)
+    return DETECTOR or detectors[0]
 
 
-# The camera measures more light with the LED on than with it off.
+# Keep all light sources off before and after each test.
+@pytest.fixture
+def light_source(request):
+    all_lights_off()
+    yield request.param
+    all_lights_off()
+
+
+# Check each configured light source as a separate pytest test.
 @pytest.mark.hardware
-def test_led_is_visible_to_the_camera(led_and_camera):
-    laser_name, detector_name = led_and_camera
+@pytest.mark.parametrize(
+    "light_source",
+    [pytest.param(name, id=name) for name in LIGHTS],
+    indirect=True,
+)
+def test_light_source_is_visible_to_camera(light_source, detector_name):
+    dark = take_image(detector_name)
 
-    set_led(laser_name, on=False)
-    dark = mean_brightness(detector_name)
+    set_light(light_source, True)
+    bright = take_image(detector_name)
 
-    set_led(laser_name, on=True)
-    bright = mean_brightness(detector_name)
+    change = ImageStat.Stat(
+        ImageChops.difference(dark, bright)
+    ).mean[0]
 
-    ratio = bright / dark if dark else float("inf")
-    print(f"\ndark={dark:.2f}  bright={bright:.2f}  ratio={ratio:.1f}  (need >= {MIN_RATIO})")
+    print(f"\n{light_source}: pixel_change={change:.2f}")
 
-    assert ratio >= MIN_RATIO, (
-        f"the sensor saw no extra light when {laser_name!r} was switched on "
-        f"(dark={dark:.2f}, bright={bright:.2f}, ratio={ratio:.1f}). "
-        f"Is the LED in the camera's field of view, and is auto-exposure "
-        f"compensating for it?"
+    assert change >= MIN_CHANGE, (
+        f"{light_source}: image changed only by {change:.2f} "
+        f"(need >= {MIN_CHANGE})"
     )
