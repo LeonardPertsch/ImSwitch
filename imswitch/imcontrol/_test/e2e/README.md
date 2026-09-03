@@ -16,7 +16,7 @@ One folder per hardware component:
 | Folder | Hardware | Status on this rig |
 |---|---|---|
 | [`camera/`](camera/) | RPi camera (IMX477) via `RecordingController` | works — real sensor data |
-| [`laser/`](laser/) | LED on the UC2 ESP32, LASER3 / GPIO2 | serial works; HTTP needs a setup change |
+| [`laser/`](laser/) | LED on the UC2 ESP32, LASER3 / GPIO2 | needs the LED mapped in the setup + a restart |
 | [`photon/`](photon/) | LED on, camera measures the light | needs the LED mapped + a restart, like the HTTP laser test |
 
 Add a folder per component as hardware is added (`positioner/`, `ledmatrix/`, …).
@@ -41,7 +41,7 @@ Every component folder also has its own script:
 | Script | What it runs |
 |---|---|
 | `camera/run_camera_snap.sh` | the snap test; `--curl` for a quick check into `/tmp/snap.png` |
-| `laser/run_laser_test.sh` | serial + http tests; `--blink` for a visible blink, `--wire` for the JSON on the wire |
+| `laser/run_laser_test.sh` | the laser test; `--wire` to watch the JSON go to the ESP32 |
 | `photon/run_photon_test.sh` | the photon test; `--measure` to print dark/bright/ratio without asserting |
 
 Override with `PI_HOST`, `IMSWITCH_CONTAINER`, `IMSWITCH_URL`.
@@ -57,9 +57,10 @@ All tests **skip rather than fail** when their hardware or ImSwitch is absent, s
 this is safe to run anywhere. The one exception is `photon/`: once it does run, a
 missing brightness difference is a real failure — that is the point of it.
 
-`laser/test_laser3_serial.py` and everything HTTP-driven are mutually exclusive.
-While ImSwitch holds `/dev/ttyUSB0` the serial test skips; if you unmap the ESP32
-from the setup, the HTTP laser and photon tests skip instead.
+Every test now goes through the HTTP API, so they coexist happily. The only thing
+that competes for `/dev/ttyUSB0` is `laser/show_wire_traffic.py`, which talks to
+the ESP32 directly and therefore only works while ImSwitch is *not* connected to
+it.
 
 ## Rig facts that apply everywhere
 

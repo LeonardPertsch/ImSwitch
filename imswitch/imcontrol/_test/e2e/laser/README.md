@@ -1,36 +1,15 @@
 # Laser / LED E2E
 
 An LED wired to the UC2 ESP32's **LASER3 output = GPIO2** (confirmed by blinking
-it). Firmware pin map, read from `/laser_get`:
+it and watching). Firmware pin map, read from `/laser_get`:
 
 ```
 LASER1pin: GPIO12    LASER2pin: GPIO4    LASER3pin: GPIO2
 ```
 
-## `test_laser3_serial.py` — works today
+## `test_laser3_http.py`
 
-Direct serial, no HTTP, no ImSwitch:
-
-1. Opens `/dev/ttyUSB0` at 115200, resets the board, drops the boot log.
-2. Sends `{"task":"/laser_act","LASERid":3,"LASERval":500}`.
-3. Sends `{"task":"/laser_get"}`, parses the `++ ... --` frame, asserts `LASER3val > 0`.
-4. Sends `LASERval:0` and asserts `LASER3val == 0`.
-5. Always closes the port (and sets the laser back to 0) in a `finally`.
-
-```bash
-# visible 3s blink + read-back, one SSH hop into the container:
-ssh pi@192.168.178.124 'docker exec -i imswitch-server-1 python3 -' < test_laser3_serial.py
-
-# as pytest:
-python3 -m pytest test_laser3_serial.py -m hardware
-```
-
-Skips if pyserial is missing, `/dev/ttyUSB0` is absent, or the port is held by
-another process. Override the device with `UC2_PORT`.
-
-## `test_laser3_http.py` — needs a setup change first
-
-Same on/off check, but driven through ImSwitch:
+Switches the LED through ImSwitch:
 
 ```
 GET /api/LaserController/setLaserActive?laserName=LED&active=true
@@ -40,16 +19,26 @@ GET /api/LaserController/setLaserActive?laserName=LED&active=true
   -> ESP32   {"task":"/laser_act","LASERid":3,...}
 ```
 
-Asserts on `getLaserActive` / `getLaserValue` read-back rather than on log
-content — `setLaserActive` does not log anything itself. A fixture turns the
+Asserts on `getLaserActive` / `getLaserValue` read-back. A fixture switches the
 laser back off afterwards.
+
+**What this proves, and what it does not.** `getLaserActive` returns
+`self.enabled`, which `setLaserActive` assigned a moment earlier — so a pass
+means the request travelled through ImSwitch without error, not that any light
+came out. For that, see [`../photon/`](../photon/).
+
+```bash
+./run_laser_test.sh
+```
 
 Env: `IMSWITCH_URL` (default `http://localhost:8000/imswitch`), `IMSWITCH_LASER`
 (default: first laser in the setup).
 
-It currently **skips**: the active setup `example_raspberry_pi_camera.json` has
-`lasers: []`. To make it run, the setup needs an ESP32 and a laser bound to it —
-`channel_index` is the LASERid, so the LED on GPIO2 is `channel_index: 3`:
+## What the setup file needs
+
+The test skips while the active setup has no lasers. It needs an ESP32 and a
+laser bound to it — `channel_index` is the LASERid, so the LED on GPIO2 is
+`channel_index: 3`:
 
 ```json
 "rs232devices": {
@@ -67,8 +56,15 @@ It currently **skips**: the active setup `example_raspberry_pi_camera.json` has
 }
 ```
 
-None of the 11 ESP32 setups already on the Pi fit — they all point at `COM3` or
-a macOS device and use `channel_index` 1, 2, 4 or the string `'LED'`.
+Two things bite here:
+
+- **ImSwitch reads the setup only at startup.** Editing the file changes nothing
+  until `docker restart imswitch-server-1`.
+- `channel_index` **must be an integer**. The string `'LED'`, used by several of
+  the older setups on the Pi, raises a hard `ValueError` on load.
+
+None of the 11 ESP32 setups already on the Pi fit as they are — they all point at
+`COM3` or a macOS device and use `channel_index` 1, 2, 4 or `'LED'`.
 
 ## `show_wire_traffic.py` — diagnostic, not a test
 
@@ -85,19 +81,20 @@ with `DEBUG=True` so both directions land on stdout. Verified output:
 ```
 
 `[ProcessLines]` is the proof the command arrived: those are bytes the ESP32 sent
-back, with the matching `qid`.
+back, carrying the matching `qid`.
 
 ```bash
-ssh pi@192.168.178.124 'docker exec -i imswitch-server-1 python3 -' < show_wire_traffic.py
+./run_laser_test.sh --wire
 ```
+
+It opens `/dev/ttyUSB0` itself, so it only works **while ImSwitch is not
+connected to the ESP32** — only one process can hold the port. Once the setup
+above is live, this script stops working and the HTTP test starts.
 
 ## Limits
 
-- The serial and HTTP tests are **mutually exclusive** — only one process can
-  hold `/dev/ttyUSB0`. Once ImSwitch owns it, the serial test skips, and vice versa.
-- Opening the port resets the ESP32 via DTR/RTS. Unavoidable on the CP2102.
-- `LASER_ID = 3` is hard-coded from this rig's wiring.
+- Opening the serial port resets the ESP32 via DTR/RTS. Unavoidable on the CP2102.
 - The firmware reports internal PWM state, not a measurement — with the LED
-  unplugged the assertions would still pass. Only the camera can prove light.
+  unplugged everything here would still pass. Only the camera can prove light.
 - `success` is not a uniform code: `/laser_act` answers `success:1` on success,
-  `/ledarr_act` answers `success:0`. Neither test asserts on it.
+  `/ledarr_act` answers `success:0`. Nothing here asserts on it.

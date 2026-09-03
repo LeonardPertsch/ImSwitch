@@ -1,8 +1,8 @@
 """The one test that cannot pass without real photons.
 
-Every other test here reads back state that software set: the laser tests get an
-ImSwitch attribute or the ESP32's own PWM register, and the camera test proves a
-PNG arrived but says nothing about what is in it. This one switches the LED on,
+Every other test here reads back state that software set: the laser test gets an
+ImSwitch attribute assigned a moment earlier, and the camera test proves a PNG
+arrived but says nothing about what is in it. This one switches the LED on,
 photographs the result, and asserts the sensor actually got brighter.
 
     LED off -> snap -> mean brightness   (dark)

@@ -1,4 +1,4 @@
-"""Switch the LED on and off through ImSwitch instead of over the serial port.
+"""Switch the LED on and off through the ImSwitch HTTP API.
 
 The chain the request travels:
 

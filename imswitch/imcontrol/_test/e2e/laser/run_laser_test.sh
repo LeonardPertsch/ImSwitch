@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# Run the laser tests on the Pi, inside the imswitch container.
+# Run the laser test on the Pi, inside the imswitch container.
 # One SSH connection, so one password prompt.
 #
-#   ./run_laser_test.sh          # pytest: serial + http
-#   ./run_laser_test.sh --blink  # visible 3s blink with read-back
-#   ./run_laser_test.sh --wire   # show the JSON going over the wire
+#   ./run_laser_test.sh          # pytest
+#   ./run_laser_test.sh --wire   # show the JSON going over the wire to the ESP32
 #
 # Override with PI_HOST / IMSWITCH_CONTAINER.
 set -euo pipefail
@@ -13,15 +12,10 @@ PI="${PI_HOST:-pi@192.168.178.124}"
 CONTAINER="${IMSWITCH_CONTAINER:-imswitch-server-1}"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# --blink / --wire just run one file as a plain script
-case "${1:-}" in
-    --blink) FILE="$DIR/test_laser3_serial.py" ;;
-    --wire)  FILE="$DIR/show_wire_traffic.py" ;;
-    *)       FILE="" ;;
-esac
-
-if [ -n "$FILE" ]; then
-    ssh "$PI" "docker exec -i $CONTAINER python3 -" < "$FILE"
+# --wire runs the diagnostic script instead; it needs the serial port to itself,
+# so it only works while ImSwitch is not connected to the ESP32.
+if [ "${1:-}" = "--wire" ]; then
+    ssh "$PI" "docker exec -i $CONTAINER python3 -" < "$DIR/show_wire_traffic.py"
     exit 0
 fi
 

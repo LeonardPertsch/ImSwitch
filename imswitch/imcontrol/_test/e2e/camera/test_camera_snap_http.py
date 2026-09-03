@@ -1,6 +1,6 @@
 """Grab a frame off the real camera sensor over HTTP and check its dimensions.
 
-The laser tests only read back an ImSwitch-internal attribute - getLaserActive
+The laser test only reads back an ImSwitch-internal attribute - getLaserActive
 hands back self.enabled, set one line earlier. A PNG in sensor resolution has to
 have come from the physical sensor, so this test reaches real hardware. It does
 not look at the pixels though; for that see ../photon/.

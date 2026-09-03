@@ -7,7 +7,6 @@ Every other test reads back state that software set:
 | Test | What the read-back proves |
 |---|---|
 | `laser/test_laser3_http.py` | `getLaserActive` returns `self.enabled`, set a line earlier |
-| `laser/test_laser3_serial.py` | the ESP32's own PWM register |
 | `camera/test_camera_snap_http.py` | a PNG of the right size arrived — not what is in it |
 | **`photon/test_led_photon.py`** | **light physically hit the sensor** |
 
@@ -30,8 +29,7 @@ half-covered LED rather than only a completely dark one.
 
 Because it drives the LED through ImSwitch, the setup must map the LED onto the
 ESP32 (see `../laser/README.md`) and ImSwitch must have been restarted since.
-It then runs happily alongside the camera and HTTP laser tests - only
-`../laser/test_laser3_serial.py` steps aside, since ImSwitch holds the port.
+It then runs alongside the camera and laser tests with no conflicts.
 
 ## Running
 
