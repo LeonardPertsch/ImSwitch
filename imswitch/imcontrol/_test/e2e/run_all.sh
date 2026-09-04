@@ -8,10 +8,15 @@
 #
 # Override with PI_HOST / IMSWITCH_CONTAINER / PHOTON_MIN_RATIO / UC2_LASER_VALUE.
 set -euo pipefail
-
 PI="${PI_HOST:-pi@192.168.178.124}"
 CONTAINER="${IMSWITCH_CONTAINER:-imswitch-server-1}"
 DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# pytest turns colour off when stdout is not a tty, and it never is here: both
+# ssh and docker exec are run without one. Force it back on, but only while we
+# are actually on a terminal, so redirecting to a file stays clean text.
+COLOR=""
+if [ -t 1 ]; then COLOR="--color=yes"; fi
 
 # inside the container ImSwitch is on :8001 without the caddy prefix
 ENVS="-e IMSWITCH_URL=http://localhost:8001"
@@ -28,5 +33,5 @@ tar --no-xattrs -czf - -C "$DIR" . | ssh "$PI" "
     docker cp /tmp/e2e.tgz $CONTAINER:/tmp/e2e.tgz >/dev/null &&
     docker exec $CONTAINER sh -c 'rm -rf /tmp/e2e && mkdir -p /tmp/e2e && tar xzf /tmp/e2e.tgz -C /tmp/e2e' &&
     docker exec $ENVS $CONTAINER python3 -m pytest $TARGETS \
-        -v -ra -p no:arkitekt_next -p no:cacheprovider -o markers=hardware
+        -v -ra --tb=line $COLOR -p no:arkitekt_next -p no:cacheprovider -o markers=hardware
 "

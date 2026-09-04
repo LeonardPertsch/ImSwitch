@@ -60,6 +60,12 @@ REMOTE_TEST_DIR="${REMOTE_TEST_DIR:-/tmp/laser_tests}"
 # show_wire_traffic.py diagnostic script.
 LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# pytest turns colour off when stdout is not a tty, and it never is here: both
+# ssh and docker exec are run without one. Force it back on, but only while we
+# are actually on a terminal, so redirecting to a file stays clean text.
+COLOR=""
+if [ -t 1 ]; then COLOR="--color=yes"; fi
+
 
 # Pack the local laser-test directory and send it to the remote machine through
 # the existing SSH connection.
@@ -90,6 +96,8 @@ ssh "$PI" "
         '$REMOTE_TEST_DIR' \
         -v \
         -ra \
+        --tb=line \
+        $COLOR \
         -m hardware \
         -p no:arkitekt_next \
         -p no:cacheprovider \

@@ -30,6 +30,12 @@ TEST="$(cd "$(dirname "$0")" && pwd)/test_camera_snap_http.py"
 
 DETECTOR="${IMSWITCH_DETECTOR:-RPiCam}"
 
+# pytest turns colour off when stdout is not a tty, and it never is here: both
+# ssh and docker exec are run without one. Force it back on, but only while we
+# are actually on a terminal, so redirecting to a file stays clean text.
+COLOR=""
+if [ -t 1 ]; then COLOR="--color=yes"; fi
+
 
 if [ "${1:-}" = "--curl" ]; then
     curl -sS -o /tmp/snap.png -w 'HTTP %{http_code}  %{content_type}  %{size_download} bytes\n' \
@@ -40,5 +46,5 @@ fi
 
 ssh "$PI" "cat > /tmp/test_camera_snap_http.py \
     && docker cp /tmp/test_camera_snap_http.py $CONTAINER:/tmp/ >/dev/null \
-    && docker exec $ENVS $CONTAINER python3 -m pytest /tmp/test_camera_snap_http.py -v -p no:arkitekt_next" \
+    && docker exec $ENVS $CONTAINER python3 -m pytest /tmp/test_camera_snap_http.py -v --tb=line $COLOR -p no:arkitekt_next" \
     < "$TEST"
