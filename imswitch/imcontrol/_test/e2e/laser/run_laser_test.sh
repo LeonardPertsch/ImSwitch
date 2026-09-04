@@ -13,10 +13,11 @@
 #       Run all laser hardware tests.
 #
 #   ./run_laser_test.sh --measure
-#       Print the measured brightness per laser and drop the threshold, so a
-#       dim light no longer fails the run. Useful after moving a light or the
-#       optics. A light that produces no signal at all is still reported as a
-#       failure, because that is a result rather than a calibration question.
+#       Print the measured brightness per laser with the threshold dropped, so
+#       a dim light does not fail the run. Useful for setting the threshold
+#       after moving a light or the optics. A light that produces no signal at
+#       all still fails, because that is a result rather than a calibration
+#       question.
 #
 # Configuration can be overridden through environment variables:
 #

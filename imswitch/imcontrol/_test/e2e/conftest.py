@@ -15,35 +15,31 @@ BASE_URL = os.environ.get("IMSWITCH_URL", "http://localhost:8001")
 AUTO_EXPOSURE_RESET_MS = int(os.environ.get("AUTO_EXPOSURE_RESET_MS", "1500"))
 
 
-# Colour the progress percentage yellow once something has been skipped, so a
-# skipped test no longer shows a green [ 66%] next to a yellow SKIPPED.
+# Colour the progress percentage yellow once something has been skipped.
 #
-# pytest does not do this on its own. TerminalReporter._determine_main_color
-# turns the percentage yellow for "warnings", "xpassed" and unknown outcomes,
-# and red for "failed" and "error" - but "skipped" is not in that list, so a
-# run whose tests otherwise pass stays green throughout.
+# TerminalReporter._determine_main_color turns the percentage yellow for
+# "warnings", "xpassed" and unknown outcomes and red for "failed" and "error".
+# "skipped" is not in that list, so an otherwise passing run shows a green
+# percentage next to a yellow SKIPPED. These tests skip whenever the hardware
+# they need is absent, which is the difference between "the rig is fine" and
+# "the rig was never asked", so it is worth seeing at a glance.
 #
-# That matters more here than in a normal suite: these tests skip whenever the
-# hardware they need is absent, so a skip is the difference between "the rig is
-# fine" and "the rig was never asked". It should be visible at a glance.
+# The override applies only while the percentage is being written. The closing
+# summary line goes through the same method and keeps pytest's verdict: a run
+# of passes and skips with nothing failed is a green pass, because a skipped
+# test is one that was not needed rather than a problem. So the percentage
+# flags the individual skip while the bottom line still reads as success.
 #
-# The override applies ONLY while the progress percentage is being written. The
-# closing summary line uses the same method, and there the verdict should stay
-# what pytest makes it: a run of passes and skips with nothing failed is a
-# green pass, because a skipped test is a test that was not needed, not a
-# problem with the run. So the percentage flags the individual skip while the
-# bottom line still reads as success.
+# Within the percentage the colour is cumulative, the way pytest already treats
+# red: from the first skip onwards it stays yellow, and a later failure wins
+# because only green is upgraded.
 #
-# Within the percentage the colour is cumulative, matching how pytest already
-# treats red: from the first skipped test onwards it stays yellow, and a later
-# failure still wins because only green is upgraded.
+# Hooked at session start rather than configure: the terminal reporter
+# registers itself during configure, and a conftest's pytest_configure runs
+# before that, where get_plugin("terminalreporter") answers None.
 #
-# Hooked at session start, not at configure: the terminal reporter registers
-# itself during configure, and a conftest's pytest_configure runs before that,
-# where get_plugin("terminalreporter") still answers None.
-#
-# This wraps private methods, so it degrades to doing nothing rather than
-# breaking the run if a future pytest renames them.
+# These are private pytest attributes. Every access is guarded, so a rename in
+# a future pytest falls back to stock colouring instead of breaking the run.
 def pytest_sessionstart(session):
     reporter = session.config.pluginmanager.get_plugin("terminalreporter")
 

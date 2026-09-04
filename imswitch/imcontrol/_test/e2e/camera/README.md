@@ -19,15 +19,17 @@ dimensions are `resizeFactor x` the frame size the camera reports. The
 dimensions come straight out of the PNG IHDR header, so no Pillow or numpy.
 
 Nothing about the sensor is hardcoded. The expected size comes from
-`getCameraStatus`, preferring `currentWidth`/`currentHeight` (they already
-account for ROI and binning) over `sensorWidth`/`sensorHeight`. The setup file
-is *not* the source: its `managerProperties.hikcam.image_width/image_height`
-say what ImSwitch asks the driver for, not what it gets — on this rig it
-declares 1000x1000 while the camera delivers 3072x2048.
+`getCameraStatus`, preferring `currentWidth`/`currentHeight` over
+`sensorWidth`/`sensorHeight` because they already account for ROI and binning.
 
-This matters because the laser tests' read-back only returns an ImSwitch-internal
-attribute — `getLaserActive` hands back `self.enabled`, set a line earlier. A PNG
-in sensor resolution can only have come off the physical sensor.
+The setup file is the wrong source for this. Its
+`managerProperties.hikcam.image_width/image_height` say what ImSwitch asks the
+driver for, not what the driver returns — on this rig it declares 1000x1000
+while the camera delivers 3072x2048.
+
+A frame in sensor resolution can only have come off the physical sensor, which
+is more than the laser HTTP test can show: `getLaserActive` there hands back
+`self.enabled`, set a line earlier.
 
 ## The mock gate
 
@@ -40,31 +42,22 @@ would go green with no camera attached.
 The `camera_status` fixture closes that hole: it reads `getCameraStatus` and
 skips when the detector is a mock.
 
-The signal is `model == "mock"`, not the `isMock` flag. `MockCameraTIS` reports
-model `"mock"`, and the OpenCV/Tucsen/ToupCam managers derive `isMock` from
-exactly that — but `HikCamManager` derives it from the *configured* `mocktype`,
-which stays `"normal"` when a mock is substituted at runtime. Forcing the mock
-path shows it:
+The signal is `model == "mock"`. `MockCameraTIS` reports that model, and the
+OpenCV, Tucsen and ToupCam managers derive their `isMock` flag from it.
 
-```
-WARNING [HikCamManager] Failed to initialize CameraHik 99, loading TIS mocker
-model       = 'mock'
-isMock      = False      <- the built-in flag misses it
-isConnected = False
-```
+Two fields in `getCameraStatus` look like they would do the job and do not,
+both because of how `HikCamManager` fills them:
 
-`isConnected` is unusable in both directions: `HikCamManager` builds it from an
-attribute the real `CameraHIK` object does not have, so it reads `False` on
-working hardware too. Skipping on it would disable these tests on a rig whose
-camera is delivering frames, which is why the gate ignores it.
+| Field | Real camera | Mock | Usable |
+|---|---|---|---|
+| `model` | `CameraHIK` | `mock` | yes |
+| `isMock` | False | False | no — derived from the configured `mocktype`, which stays `"normal"` when a mock is substituted at runtime |
+| `isConnected` | False | False | no — probes an attribute `CameraHIK` does not have, so it reads False on working hardware |
 
-Both flags are ImSwitch as it ships; nothing here patches them. The gate works
-around them from the test side, so this folder stays independent of the version
-of ImSwitch deployed on the rig.
-
-Env: `IMSWITCH_URL`, `IMSWITCH_DETECTOR` (default: first from
-`getDetectorNames`). Skips if ImSwitch is unreachable, has no detectors, or
-serves a mock camera.
+Skipping on `isConnected` would disable the camera tests on a rig whose camera
+is delivering frames, so the gate ignores it. Both flags are ImSwitch as it
+ships; the gate works around them from the test side and needs no particular
+ImSwitch version on the rig.
 
 ## Running
 
@@ -76,20 +69,27 @@ container on the Pi, so you get a single password prompt:
 ./run_camera_snap.sh --curl     # quick check, saves the PNG to /tmp/snap.png
 ```
 
-Override with `PI_HOST`, `IMSWITCH_CONTAINER`, `IMSWITCH_URL`.
-`--curl` runs from your machine, not the container, so it uses
-`IMSWITCH_EXTERNAL_URL` (default `http://<PI_HOST>:8000/imswitch`) instead.
+| Variable | Default | Meaning |
+|---|---|---|
+| `IMSWITCH_DETECTOR` | first reported | detector to snap from |
+| `IMSWITCH_URL` | `http://localhost:8001` | API base inside the container |
+| `IMSWITCH_EXTERNAL_URL` | `http://<PI_HOST>:8000/imswitch` | API base for `--curl`, which runs on your machine |
 
-Locally, if you have pytest and requests installed:
+Also `PI_HOST` and `IMSWITCH_CONTAINER` for the runner itself. The two URLs are
+explained in [`../README.md`](../README.md).
+
+Running pytest directly works too, given pytest and requests and a reachable
+ImSwitch:
 
 ```bash
-IMSWITCH_URL=http://192.168.178.124:8000/imswitch \
-  python3 -m pytest test_camera_snap_http.py -v
+IMSWITCH_URL=http://<pi>:8000/imswitch python3 -m pytest test_camera_snap_http.py -v
 ```
 
 ## Measured resize factors
 
-On the current rig, a Hik camera reporting 3072x2048:
+Output size is `resizeFactor x` the frame size the camera reports, so these
+follow whichever sensor is attached. With the Hik camera on this rig, reporting
+3072x2048:
 
 | `resizeFactor` | output |
 |---|---|
@@ -97,6 +97,3 @@ On the current rig, a Hik camera reporting 3072x2048:
 | 0.25 | 768x512 |
 | 0.5 | 1536x1024 |
 | 1.0 | 3072x2048 |
-
-These follow the attached sensor, so they change with the camera. The test
-derives them rather than assuming them.

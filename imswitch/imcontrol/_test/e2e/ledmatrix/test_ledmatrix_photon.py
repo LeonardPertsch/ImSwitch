@@ -23,9 +23,8 @@ INTENSITY = int(os.environ.get("LEDMATRIX_INTENSITY", "20"))
 MIN_CHANGE = float(os.environ.get("PHOTON_MIN_DELTA", "1.5"))
 
 # The baseline counts as quiet when two consecutive dark frames differ by less
-# than this. Deliberately a separate knob from MIN_CHANGE: --measure sets
-# MIN_CHANGE to 0 to report numbers without asserting, and sharing the constant
-# would make the settle check impossible to satisfy and skip every run.
+# than this. A separate knob from MIN_CHANGE because --measure sets MIN_CHANGE
+# to 0, and a shared constant would then make the settle check unsatisfiable.
 SETTLE_TOLERANCE = float(os.environ.get("PHOTON_SETTLE_TOLERANCE", "1"))
 
 SETTLE = 0.5
@@ -56,10 +55,12 @@ def api(controller, method, http="GET", **params):
 
 # Call one LEDMatrixController endpoint and hand back the raw response.
 #
-# The controller exposes setters only - there is no way to ask whether the
-# matrix is lit - so every caller writes rather than reads. Deliberately no
-# skipping in here: matrix_off also runs from fixture teardown, and a
-# pytest.skip raised there reports the test a second time.
+# The controller exposes setters only, with no way to ask whether the matrix is
+# lit, so every caller writes rather than reads.
+#
+# This never skips. matrix_off runs from fixture teardown as well, and a
+# pytest.skip raised during teardown reports the test a second time. Skipping
+# on a missing controller happens once, in led_matrix_available.
 #
 # API: GET /api/LEDMatrixController/{method}
 def matrix(method, **params):
@@ -121,9 +122,9 @@ def lasers_off():
 
 # Take one frame as greyscale.
 #
-# Unlike the laser photon test this does not reject an all-black frame: with
-# the matrix off and the enclosure dark, every pixel really is 0 on this rig,
-# and that is the correct baseline rather than a fault.
+# An all-black frame is valid input. With the matrix off in a closed enclosure
+# every pixel is 0, which is the baseline the test needs rather than a fault.
+# The brightness check sits on the bright frame instead.
 #
 # API: GET /api/RecordingController/snapNumpyToFastAPI
 #      params: detectorName, resizeFactor -> 200, image/png
@@ -147,10 +148,14 @@ def difference(first, second):
 
 # Return a baseline frame only once two consecutive dark frames agree.
 #
-# A freshly started stream is not settled, and two frames taken right after it
-# starts can differ by more than MIN_CHANGE with no light at all - measured at
-# 1.66 against a threshold of 1.5. Without this the test could credit that
-# drift to the matrix and pass for the wrong reason.
+# A stream that has just started still drifts: two frames taken right after
+# startLiveView differ by about 1.66 with no light at all. Measuring against
+# such a baseline would credit that drift to the matrix.
+#
+# Frame-to-frame noise never falls below about 0.52 on this rig, and waiting
+# does not lower it - it is sensor read noise, not settling. SETTLE_TOLERANCE
+# has to sit between the two numbers; below 0.52 nothing ever satisfies it and
+# the module skips every run.
 #
 # API: GET /api/RecordingController/snapNumpyToFastAPI  (via take_image)
 def settled_dark_frame(detector):
@@ -190,11 +195,11 @@ def detector_name():
     return DETECTOR or detectors[0]
 
 
-# Make sure the camera is streaming for the duration of this module.
+# Keep the camera streaming for the duration of this module.
 #
-# ViewController/setLiveViewActive is deliberately not used: it returns 200
-# without starting anything and answers 500 on the way out. LiveViewController
-# reports real state and tolerates a double stop.
+# LiveViewController owns the stream and reports real state. The older
+# ViewController/setLiveViewActive cannot be used on these rigs: switching on
+# returns 200 without starting anything and switching off answers 500.
 #
 # API (setup):    POST /api/LiveViewController/startLiveView
 #                 GET  /api/LiveViewController/getLiveViewActive

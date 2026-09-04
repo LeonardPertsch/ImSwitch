@@ -42,23 +42,38 @@ assert mean|bright - dark| >= PHOTON_MIN_DELTA
 ```
 
 Brightness is the mean of the greyscale PNG (`PIL.ImageStat`), and the
-comparison is an absolute **difference**, not a ratio. Before each test every
-known light goes off, the LED matrix included — `all_lights_off` calls
-`LEDMatrixController/setAllLEDOff` because the matrix is invisible to
-`getLaserNames` and would otherwise brighten the "dark" frame.
+comparison is an absolute **difference**, not a ratio.
 
-Live view runs through `LiveViewController`, not
-`ViewController/setLiveViewActive`. The latter is the older path and is broken
-on these rigs: its `_acqHandle` is already set at boot while
+`all_lights_off` runs before each test and switches off every light the setup
+knows, plus the LED matrix via `LEDMatrixController/setAllLEDOff`. The matrix
+needs its own call because `getLaserNames` does not report it, and a lit matrix
+would raise the dark frame.
+
+Both frames are taken at the same exposure. `auto_exposure` from the shared
+[`../conftest.py`](../conftest.py) runs one auto-exposure pass before the dark
+frame, once per pytest session, so with several lights every one of them is
+measured against the same exposure.
+
+Live view runs through `LiveViewController`. `ViewController/setLiveViewActive`
+does not work on these rigs: its `_acqHandle` is set at boot while
 `LiveViewController` owns the actual stream, so `setLiveViewActive(True)`
-returns 200 without starting anything and `setLiveViewActive(False)` always
-answers `500 Invalid or already used handle`. That 500 was the teardown error
-this folder used to end every run with.
+returns 200 without starting anything and `setLiveViewActive(False)` answers
+`500 Invalid or already used handle` on every call.
 
-Measured on the current rig: the 488 laser produces `pixel_change=0.00`, while
-the LED matrix at intensity 20 produces 3.95 through the same camera and code
-path. The camera and the threshold are fine; that laser does not reach the
-sensor.
+## What the numbers look like
+
+Frame-to-frame noise on this rig sits at ~0.5 with everything off. A light that
+reaches the sensor clears that by a wide margin, so the two cases are not close
+together:
+
+| Light | `pixel_change` |
+|---|---|
+| LED matrix at intensity 20, via [`../ledmatrix/`](../ledmatrix/) | ~52 |
+| 488 laser at full value | ~0.5 |
+
+0.5 is the noise floor, so the 488 laser contributes nothing measurable. The
+camera, the threshold and the measurement path are all working — the light does
+not arrive at the sensor.
 
 ## Running
 
@@ -67,19 +82,22 @@ sensor.
 ./run_laser_test.sh --measure    # print the brightness numbers, drop the threshold
 ```
 
-`--measure` sets `PHOTON_MIN_DELTA=0`, so a dim light no longer fails the run
-and you can read off a sensible threshold. A light that produces *no* signal at
-all still fails, with `no light reached the sensor` — that is a result, not a
-calibration question:
-
-```
-488 Laser: dark_mean=0.00 bright_mean=0.00 pixel_change=0.00
-```
+`--measure` sets `PHOTON_MIN_DELTA=0` and prints each light's numbers, so a dim
+light does not fail the run and a sensible threshold can be read off. A light
+that produces no signal at all still fails, with `no light reached the sensor`
+— that is a measurement result rather than a calibration question.
 
 The runner ships the whole folder, so adding a test file here is enough to have
-it run. Env: `PI_HOST`, `IMSWITCH_CONTAINER`, `IMSWITCH_URL`,
-`IMSWITCH_DETECTOR`, `UC2_LASER_VALUE` (default 1000), `PHOTON_MIN_DELTA`
-(default 1.5).
+it run.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `UC2_LASER_VALUE` | 1000 | value each light is set to when switched on |
+| `PHOTON_MIN_DELTA` | 1.5 | pixel change required to pass |
+| `IMSWITCH_DETECTOR` | first reported | detector to snap from |
+| `IMSWITCH_URL` | `http://localhost:8001` | API base, see [`../README.md`](../README.md) |
+
+Also `PI_HOST` and `IMSWITCH_CONTAINER` for the runner itself.
 
 ## What the setup file needs
 
@@ -113,24 +131,24 @@ Two things bite here:
 
 - **ImSwitch reads the setup only at startup.** Editing the file changes nothing
   until `docker restart imswitch-server-1`.
-- `channel_index` **must be an integer**. The string `'LED'`, used by several of
-  the older setups on the Pi, raises a hard `ValueError` on load.
+- `channel_index` **must be an integer**. The string `'LED'` raises a hard
+  `ValueError` on load, and several of the setups shipped on the Pi use it.
 
-## Why the photon test might fail even though everything works
+## Why the photon test can fail while the software works
 
-- **The light is not in the camera's field of view.** Most likely cause. It has
-  to actually illuminate what the sensor sees.
-- **Auto-exposure compensates**, darkening the image as the scene brightens and
-  cancelling the effect. Pin the exposure via `SettingsController` first.
-- **Threshold too tight** for a dim light. Calibrate with `--measure`.
-- **A freshly started stream is not settled.** Two frames taken right after
-  `startLiveView` were measured differing by 1.66 with no light at all, against
-  a threshold of 1.5 — close enough to flip a run either way.
-  [`../ledmatrix/`](../ledmatrix/) guards against this with a settled-baseline
-  check; this file does not yet.
+A missing brightness difference is a **failure, not a skip** — that is the
+point of the test. Causes worth checking, in order of likelihood:
 
-Unlike the other tests, a brightness difference that fails to show up is a
-**failure, not a skip** — that is the entire point.
+- **The light does not illuminate what the sensor sees.** It has to be in the
+  camera's field of view, not merely switched on.
+- **Exposure is too short for a dim light**, or the threshold is too tight.
+  Read the actual numbers with `--measure` and set `PHOTON_MIN_DELTA` from
+  there.
+- **The stream has just started and is still drifting.** Two frames taken right
+  after `startLiveView` differ by ~1.66 with no light at all, against a
+  threshold of 1.5. [`../ledmatrix/`](../ledmatrix/) rejects an unsettled
+  baseline with `settled_dark_frame`; this file does not, so a cold stream can
+  flip a marginal result here.
 
 ## Limits
 

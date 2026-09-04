@@ -59,17 +59,13 @@ def detector_name():
 # frame with "The camera is not connected" drawn on it. That frame is a valid
 # PNG, so every format check below would happily pass on it.
 #
-# Three signals are checked, because no single one covers every manager:
+# The signal is model == "mock", which is what MockCameraTIS reports and what
+# the OpenCV, Tucsen and ToupCam managers derive their isMock flag from.
+# isMock is checked as well, for managers that set it correctly.
 #
-#   isMock        set by HikCamManager, OpenCV, Tucsen and ToupCam from the
-#                 camera's model string
-#   isConnected   whether the manager still holds a live driver handle
-#   model         "mock" is what MockCameraTIS reports; kept as its own check
-#                 so this also works for managers that report neither flag
-#
-# isConnected is only trusted when the manager actually reports it. GXPIPY and
-# PiCam build it from their own driver attributes, and a manager that omits it
-# would otherwise look permanently disconnected and skip every run.
+# isConnected is not used. HikCamManager builds it from an attribute the real
+# CameraHIK object does not have, so it reads False on working hardware, and
+# skipping on it would disable these tests on a rig delivering frames.
 #
 # API: GET /api/SettingsController/getCameraStatus
 @pytest.fixture
@@ -93,11 +89,6 @@ def camera_status(detector_name):
             f"{detector_name}: ImSwitch served a mock camera "
             f"(model={status.get('model')!r}), no hardware attached"
         )
-
-    # isConnected is deliberately not used as a skip condition. On this rig it
-    # is False even while the camera is delivering frames, because HikCamManager
-    # probes an attribute CameraHIK does not have. Skipping on it would disable
-    # the camera tests on working hardware.
 
     return status
 
@@ -145,16 +136,16 @@ def test_camera_returns_image(detector_name):
 
 
 
-#  Resolution test against whatever sensor is actually attached.
+#  Resolution test against whatever sensor is attached.
 #
-#  The expected size comes from getCameraStatus rather than from a constant, so
-#  this follows the rig instead of assuming one specific camera. currentWidth
-#  and currentHeight are preferred over sensorWidth/sensorHeight because they
-#  already account for a ROI or binning; the sensor values are the fallback.
+#  The expected size comes from getCameraStatus, so this follows the rig rather
+#  than assuming one camera model. currentWidth and currentHeight come first
+#  because they already account for a ROI or binning, with sensorWidth and
+#  sensorHeight as the fallback.
 #
-#  Note that the setup file is not the right source here. Its
+#  The setup file is the wrong source here: its
 #  managerProperties.hikcam.image_width/image_height describe what ImSwitch
-#  asks the driver for, not what the driver delivers - on this rig it declares
+#  asks the driver for, not what the driver delivers. On this rig it declares
 #  1000x1000 while the camera returns 3072x2048.
 #
 # API: GET /api/SettingsController/getDetectorNames        (via detector_name)

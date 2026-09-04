@@ -17,15 +17,15 @@ One folder per hardware component:
 |---|---|---|
 | [`camera/`](camera/) | whatever detector the setup provides, via `RecordingController` | works — real sensor data |
 | [`laser/`](laser/) | lasers/LEDs on the UC2 ESP32 | API path works; the 488 laser does not reach the sensor |
-| [`ledmatrix/`](ledmatrix/) | ESP32 LED matrix | works — 3.95 pixel change at intensity 20 |
+| [`ledmatrix/`](ledmatrix/) | ESP32 LED matrix | works — ~52 pixel change at intensity 20 |
 
 Add a folder per component as hardware is added (`positioner/`, …).
 
-Each light folder holds two levels of proof: an HTTP test that only shows the
-request got through ImSwitch, and a *photon* test that measures with the camera
-whether light actually arrived. Only the latter can fail because of the
-hardware itself — everything else reads back state that software set one call
-earlier.
+Light sources are tested at two levels. An HTTP test shows the request reached
+ImSwitch and came back without error; a *photon* test switches the light on and
+measures with the camera whether it arrived. Only the photon tests can fail
+because of the hardware itself — everything else reads back state that software
+set one call earlier.
 
 ## Running everything
 
@@ -81,10 +81,8 @@ this is safe to run anywhere. The exception is the photon tests
 (`laser/test_laser_photon.py`, `ledmatrix/`): once they do run, a missing
 brightness difference is a real failure — that is the point of them.
 
-Every test now goes through the HTTP API, so they coexist happily. The only thing
-that competes for `/dev/ttyUSB0` is `laser/show_wire_traffic.py`, which talks to
-the ESP32 directly and therefore only works while ImSwitch is *not* connected to
-it.
+Every test goes through the HTTP API, so nothing here competes with ImSwitch
+for `/dev/ttyUSB0` and the folders can run in any combination.
 
 ## Rig facts that apply everywhere
 

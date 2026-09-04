@@ -81,14 +81,13 @@ def set_light(name, on):
 
 # Switch off the LED matrix, which LIGHTS does not cover.
 #
-# The matrix has its own controller and getLaserNames does not report it, so
-# without this it stays lit through the whole module and the "dark" frame is
-# not dark. It also exposes setters only - there is no way to ask whether it is
-# on - so this fires unconditionally rather than checking first.
+# The matrix sits behind its own controller and getLaserNames does not report
+# it, so it needs a separate call or it stays lit and raises the dark frame.
+# The controller exposes setters only, with no way to ask whether the matrix is
+# on, so this writes unconditionally.
 #
-# A setup without the matrix answers 404, which is not a failure here; anything
-# else is, because a matrix that refuses to switch off invalidates the
-# measurement rather than merely being absent.
+# 404 means the setup has no matrix, which is fine. Any other error is not: a
+# matrix that refuses to switch off invalidates the measurement.
 #
 # API: GET /api/LEDMatrixController/setAllLEDOff
 def led_matrix_off():
@@ -120,11 +119,10 @@ def all_lights_off():
 
 # Take one frame as greyscale.
 #
-# An all-black frame is deliberately not rejected here. Since all_lights_off
-# also switches off the LED matrix, the dark frame on a rig in a closed
-# enclosure really is every pixel 0, and treating that as a fault would fail
-# the test on exactly the baseline it needs. The brightness check belongs on
-# the bright frame instead, where it is done.
+# An all-black frame is valid input. With every light off, including the LED
+# matrix, the dark frame in a closed enclosure is every pixel 0 - that is the
+# baseline the test needs, not a fault. The brightness check sits on the bright
+# frame, where a black result does mean something is wrong.
 #
 # API: GET /api/RecordingController/snapNumpyToFastAPI
 #      params: detectorName, resizeFactor -> 200, image/png
@@ -140,14 +138,12 @@ def take_image(detector):
     return Image.open(io.BytesIO(response.content)).convert("L")
 
 
-# Start camera acquisition for the photon tests.
+# Keep the camera streaming for the duration of this module.
 #
-# This uses LiveViewController, not ViewController/setLiveViewActive. The
-# latter is the older path and is broken on these rigs: its _acqHandle is
-# already set at boot while LiveViewController owns the actual stream, so
-# setLiveViewActive(True) returns 200 without starting anything and
-# setLiveViewActive(False) always answers 500 "Invalid or already used
-# handle". LiveViewController reports real state and tolerates a double stop.
+# LiveViewController owns the stream and reports real state. The older
+# ViewController/setLiveViewActive cannot be used on these rigs: its _acqHandle
+# is set at boot, so switching on returns 200 without starting anything and
+# switching off answers 500 "Invalid or already used handle" every time.
 #
 # API (setup):    POST /api/LiveViewController/startLiveView
 #                 GET  /api/LiveViewController/getLiveViewActive
