@@ -1,4 +1,3 @@
-```bash
 #!/usr/bin/env bash
 
 # Run the laser hardware tests on a remote machine inside the ImSwitch container.
@@ -110,4 +109,3 @@ ssh "$PI" "
         -p no:cacheprovider \
         -o 'markers=hardware: tests requiring real microscope hardware'
 "
-```

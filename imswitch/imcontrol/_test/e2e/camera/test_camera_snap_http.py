@@ -15,11 +15,15 @@ RESIZE_FACTOR = 0.1
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 #Read width and height from the PNG IHDR header.
+#
+# API: none, pure byte parsing on a response body
 def png_dimensions(raw):
     assert raw[:8] == PNG_SIGNATURE, "response body is not a PNG"
     return struct.unpack(">II", raw[16:24])
 
 #Return a detector from the currently active ImSwitch setup.
+#
+# API: GET /api/SettingsController/getDetectorNames
 @pytest.fixture
 def detector_name():
     try:
@@ -45,6 +49,9 @@ def detector_name():
     return DETECTOR_NAME or detectors[0]
 
 #Request one camera frame from ImSwitch.
+#
+# API: GET /api/RecordingController/snapNumpyToFastAPI
+#      params: detectorName, resizeFactor -> 200, image/png
 def snap(detector_name):
     response = requests.get(
         f"{BASE_URL}/api/RecordingController/snapNumpyToFastAPI",
@@ -64,6 +71,9 @@ def snap(detector_name):
 #   Generic camera test.
 #   Proves that ImSwitch can retrieve a PNG frame from the configured detector.
 #   Makes no assumption about the specific camera model or resolution.
+#
+# API: GET /api/SettingsController/getDetectorNames        (via detector_name)
+#      GET /api/RecordingController/snapNumpyToFastAPI     (via snap)
 @pytest.mark.hardware
 def test_camera_returns_image(detector_name):
     response = snap(detector_name)
@@ -82,6 +92,9 @@ def test_camera_returns_image(detector_name):
 #  Hardware-specific resolution test.
 #  Checks that the returned frame matches an IMX477 sensor with
 #  4056x3040 pixels, scaled by RESIZE_FACTOR.
+#
+# API: GET /api/SettingsController/getDetectorNames        (via detector_name)
+#      GET /api/RecordingController/snapNumpyToFastAPI     (via snap)
 @pytest.mark.hardware
 def test_camera_has_expected_imx477_resolution(detector_name):
     response = snap(detector_name)

@@ -20,6 +20,9 @@ RESIZE = 0.25
 
 
 # Call an ImSwitch API endpoint and return JSON.
+#
+# API: GET {BASE_URL}/api/{controller}/{method}
+#      every call in this file except take_image goes through here
 def api(controller, method, **params):
     response = requests.get(
         f"{BASE_URL}/api/{controller}/{method}",
@@ -31,6 +34,8 @@ def api(controller, method, **params):
 
 
 # Get all configured light sources.
+#
+# API: GET /api/LaserController/getLaserNames
 def get_lights():
     try:
         return api("LaserController", "getLaserNames")
@@ -42,6 +47,9 @@ LIGHTS = get_lights()
 
 
 # Switch one light source on or off.
+#
+# API: GET /api/LaserController/setLaserValue   (LASER_VALUE when on, else 0)
+#      GET /api/LaserController/setLaserActive
 def set_light(name, on):
     api(
         "LaserController",
@@ -59,12 +67,19 @@ def set_light(name, on):
 
 
 # Switch every configured light source off.
+#
+# API: GET /api/LaserController/setLaserValue   (via set_light, once per light)
+#      GET /api/LaserController/setLaserActive
 def all_lights_off():
     for name in LIGHTS:
         set_light(name, False)
 
 
 # Take one frame and reject empty camera frames.
+#
+# API: GET /api/RecordingController/snapNumpyToFastAPI
+#      params: detectorName, resizeFactor -> 200, image/png
+#      called directly, not through api(), because the body is PNG and not JSON
 def take_image(detector):
     response = requests.get(
         f"{BASE_URL}/api/RecordingController/snapNumpyToFastAPI",
@@ -81,6 +96,11 @@ def take_image(detector):
 
 
 # Start camera acquisition for the photon tests.
+#
+# API (setup):    GET /api/ViewController/setLiveViewActive   (active=True)
+# API (teardown): GET /api/LaserController/setLaserValue      (via all_lights_off)
+#                 GET /api/LaserController/setLaserActive
+#                 GET /api/ViewController/setLiveViewActive   (active=False)
 @pytest.fixture(scope="module", autouse=True)
 def camera_acquisition():
     api("ViewController", "setLiveViewActive", active=True)
@@ -93,6 +113,8 @@ def camera_acquisition():
 
 
 # Use the requested detector or the first configured one.
+#
+# API: GET /api/SettingsController/getDetectorNames
 @pytest.fixture(scope="module")
 def detector_name():
     detectors = api("SettingsController", "getDetectorNames")
@@ -106,6 +128,10 @@ def detector_name():
 
 
 # Keep all light sources off before and after each test.
+#
+# API (setup and teardown): GET /api/LaserController/setLaserValue
+#                           GET /api/LaserController/setLaserActive
+#                           both via all_lights_off, once per light
 @pytest.fixture
 def light_source(request):
     all_lights_off()
@@ -114,6 +140,11 @@ def light_source(request):
 
 
 # Check each configured light source as a separate pytest test.
+#
+# API: GET /api/RecordingController/snapNumpyToFastAPI  (dark frame, via take_image)
+#      GET /api/LaserController/setLaserValue           (light on, via set_light)
+#      GET /api/LaserController/setLaserActive
+#      GET /api/RecordingController/snapNumpyToFastAPI  (bright frame, via take_image)
 @pytest.mark.hardware
 @pytest.mark.parametrize(
     "light_source",

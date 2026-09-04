@@ -1,4 +1,3 @@
-```bash
 #!/usr/bin/env bash
 
 # Run the photon tests inside the ImSwitch container.
@@ -35,4 +34,3 @@ ssh "$PI" "cat > /tmp/test_led_photon.py \
     && docker exec $ENVS $CONTAINER python3 -m pytest \
         /tmp/test_led_photon.py $EXTRA -p no:arkitekt_next" \
     < "$TEST"
-```
