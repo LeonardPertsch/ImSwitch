@@ -4,12 +4,11 @@ import pytest
 import requests
 
 
-# Base URL of the ImSwitch HTTP API.
-# IMSWITCH_URL can override the default when the test runs in another environment.
-BASE_URL = os.environ.get(
-    "IMSWITCH_URL",
-    "http://localhost:8000/imswitch",
-)
+# Base URL of the ImSwitch HTTP API, as seen from wherever this test runs.
+# The runners execute pytest inside the container, where ImSwitch is on its
+# own port without the caddy prefix. From outside the Pi it is
+# http://<pi>:8000/imswitch instead, so set IMSWITCH_URL when running locally.
+BASE_URL = os.environ.get("IMSWITCH_URL", "http://localhost:8001")
 
 # Base endpoint for all LaserController API calls.
 LASER_API = f"{BASE_URL}/api/LaserController"

@@ -61,20 +61,6 @@ REMOTE_TEST_DIR="${REMOTE_TEST_DIR:-/tmp/laser_tests}"
 LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 
-# Run the serial diagnostic instead of pytest.
-#
-# This script talks directly to the serial connection used by the ESP32.
-# Therefore it should only be used when ImSwitch itself is not currently
-# occupying that serial connection.
-if [ "${1:-}" = "--wire" ]; then
-    ssh "$PI" \
-        "docker exec -i '$CONTAINER' '$PYTHON_BIN' -" \
-        < "$LOCAL_DIR/show_wire_traffic.py"
-
-    exit 0
-fi
-
-
 # Pack the local laser-test directory and send it to the remote machine through
 # the existing SSH connection.
 #

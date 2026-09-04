@@ -10,6 +10,10 @@ import requests
 from PIL import Image, ImageChops, ImageStat
 
 
+# Base URL of the ImSwitch HTTP API, as seen from wherever this test runs.
+# The runners execute pytest inside the container, where ImSwitch is on its
+# own port without the caddy prefix. From outside the Pi it is
+# http://<pi>:8000/imswitch instead, so set IMSWITCH_URL when running locally.
 BASE_URL = os.environ.get("IMSWITCH_URL", "http://localhost:8001")
 DETECTOR = os.environ.get("IMSWITCH_DETECTOR")
 LASER_VALUE = int(os.environ.get("UC2_LASER_VALUE", "1000"))

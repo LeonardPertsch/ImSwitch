@@ -31,7 +31,7 @@ came out. For that, see [`../photon/`](../photon/).
 ./run_laser_test.sh
 ```
 
-Env: `IMSWITCH_URL` (default `http://localhost:8000/imswitch`), `IMSWITCH_LASER`
+Env: `IMSWITCH_URL` (default `http://localhost:8001`), `IMSWITCH_LASER`
 (default: first laser in the setup).
 
 ## What the setup file needs

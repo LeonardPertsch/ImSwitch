@@ -46,7 +46,28 @@ Every component folder also has its own script:
 
 Override with `PI_HOST`, `IMSWITCH_CONTAINER`, `IMSWITCH_URL`.
 
-Straight pytest works too, if you have it and can reach ImSwitch:
+## The two URLs
+
+`IMSWITCH_URL` always means *ImSwitch as seen from wherever the request is
+made* — which is not the same address in both directions:
+
+| Requesting from | URL | Why |
+|---|---|---|
+| inside the container (where the runners put pytest) | `http://localhost:8001` | ImSwitch's own port, no prefix |
+| outside, e.g. your machine | `http://<pi>:8000/imswitch` | caddy publishes :8000 and routes `/imswitch` |
+
+`localhost:8000` works in neither: caddy is a separate container, so from inside
+`imswitch-server-1` there is nothing on :8000, and on your machine `localhost`
+is your machine.
+
+All three tests therefore default to `http://localhost:8001`, and every runner
+passes that same value in explicitly. The one place that needs the outside URL
+is `camera/run_camera_snap.sh --curl`, which fires from your machine rather than
+from the container; it has its own `IMSWITCH_EXTERNAL_URL`, derived from
+`PI_HOST` so it follows whichever rig you point at.
+
+Straight pytest works too, if you have it and can reach ImSwitch — from your
+machine that means the outside URL:
 
 ```bash
 IMSWITCH_URL=http://192.168.178.124:8000/imswitch \
@@ -65,7 +86,8 @@ it.
 ## Rig facts that apply everywhere
 
 - ImSwitch is reachable at `http://192.168.178.124:8000/imswitch` from outside;
-  port 8001 is bound only *inside* the imswitch container.
+  port 8001 is bound only *inside* the imswitch container. See
+  [The two URLs](#the-two-urls).
 - The ESP32 is a UC2_Feather V2.0 on `/dev/ttyUSB0` at 115200 baud.
 - Only one process may hold `/dev/ttyUSB0` — ImSwitch or a test, never both.
 - Nothing here sends `/motor_act`. No motor commands, by design.
