@@ -19,7 +19,7 @@ DETECTOR = os.environ.get("IMSWITCH_DETECTOR")
 LASER_VALUE = int(os.environ.get("UC2_LASER_VALUE", "1000"))
 MIN_CHANGE = float(os.environ.get("PHOTON_MIN_DELTA", "1.5"))
 
-SETTLE = 1.0
+SETTLE = 0.1
 RESIZE = 0.25
 
 
@@ -184,7 +184,7 @@ def camera_acquisition(detector_name):
         f"startLiveView returned {status!r}"
     )
 
-    time.sleep(1)
+    time.sleep(0.4)
 
     yield
 
@@ -225,7 +225,8 @@ def light_source(request):
 
 # Check each configured light source as a separate pytest test.
 #
-# API: GET /api/RecordingController/snapNumpyToFastAPI  (dark frame, via take_image)
+# API: GET /api/SettingsController/setDetectorExposureOnce  (via auto_exposure)
+#      GET /api/RecordingController/snapNumpyToFastAPI  (dark frame, via take_image)
 #      GET /api/LaserController/setLaserValue           (light on, via set_light)
 #      GET /api/LaserController/setLaserActive
 #      GET /api/RecordingController/snapNumpyToFastAPI  (bright frame, via take_image)
@@ -235,7 +236,14 @@ def light_source(request):
     [pytest.param(name, id=name) for name in LIGHTS],
     indirect=True,
 )
-def test_light_source_is_visible_to_camera(light_source, detector_name):
+def test_light_source_is_visible_to_camera(light_source, detector_name, auto_exposure):
+    # Before the baseline, never between the two frames: dark and bright have
+    # to be taken at the same exposure, otherwise the measured change is partly
+    # the exposure changing rather than light arriving. The session fixture
+    # runs the pass once, so with several lights only the first test pays for
+    # it and every light is then measured at the same exposure.
+    auto_exposure(detector_name)
+
     dark = take_image(detector_name)
 
     set_light(light_source, True)

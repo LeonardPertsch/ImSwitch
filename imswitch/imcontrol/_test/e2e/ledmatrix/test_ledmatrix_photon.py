@@ -26,9 +26,9 @@ MIN_CHANGE = float(os.environ.get("PHOTON_MIN_DELTA", "1.5"))
 # than this. Deliberately a separate knob from MIN_CHANGE: --measure sets
 # MIN_CHANGE to 0 to report numbers without asserting, and sharing the constant
 # would make the settle check impossible to satisfy and skip every run.
-SETTLE_TOLERANCE = float(os.environ.get("PHOTON_SETTLE_TOLERANCE", "1.5"))
+SETTLE_TOLERANCE = float(os.environ.get("PHOTON_SETTLE_TOLERANCE", "1"))
 
-SETTLE = 2.0
+SETTLE = 0.5
 RESIZE = 0.25
 
 # How many times to re-read the baseline while waiting for the camera to go
@@ -244,7 +244,7 @@ def camera_acquisition(led_matrix_available, detector_name):
         f"startLiveView returned {status!r}"
     )
 
-    time.sleep(1)
+    time.sleep(0.4)
 
     yield
 
@@ -282,11 +282,18 @@ def dark_rig():
 # Everything else in e2e/ reads back state that software set a call earlier.
 # This compares two actual frames, so it cannot pass without photons.
 #
-# API: GET /api/RecordingController/snapNumpyToFastAPI  (dark, via settled_dark_frame)
+# API: GET /api/SettingsController/setDetectorExposureOnce  (via auto_exposure)
+#      GET /api/RecordingController/snapNumpyToFastAPI  (dark, via settled_dark_frame)
 #      GET /api/LEDMatrixController/setAllLED           (matrix on, via matrix_on)
 #      GET /api/RecordingController/snapNumpyToFastAPI  (bright, via take_image)
 @pytest.mark.hardware
-def test_led_matrix_is_visible_to_camera(dark_rig, detector_name):
+def test_led_matrix_is_visible_to_camera(dark_rig, detector_name, auto_exposure):
+    # Before the baseline, never between the two frames: dark and bright have
+    # to be taken at the same exposure, otherwise the measured change is partly
+    # the exposure changing rather than light arriving. The session fixture
+    # makes this a no-op if another photon module already ran it.
+    auto_exposure(detector_name)
+
     dark = settled_dark_frame(detector_name)
 
     matrix_on()
