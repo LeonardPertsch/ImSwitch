@@ -79,16 +79,52 @@ def set_light(name, on):
     time.sleep(SETTLE)
 
 
+# Switch off the LED matrix, which LIGHTS does not cover.
+#
+# The matrix has its own controller and getLaserNames does not report it, so
+# without this it stays lit through the whole module and the "dark" frame is
+# not dark. It also exposes setters only - there is no way to ask whether it is
+# on - so this fires unconditionally rather than checking first.
+#
+# A setup without the matrix answers 404, which is not a failure here; anything
+# else is, because a matrix that refuses to switch off invalidates the
+# measurement rather than merely being absent.
+#
+# API: GET /api/LEDMatrixController/setAllLEDOff
+def led_matrix_off():
+    try:
+        response = requests.get(
+            f"{BASE_URL}/api/LEDMatrixController/setAllLEDOff",
+            timeout=30,
+        )
+    except requests.RequestException:
+        return
+
+    if response.status_code == 404:
+        return
+
+    assert response.status_code == 200, response.text
+
+
 # Switch every configured light source off.
 #
 # API: GET /api/LaserController/setLaserValue   (via set_light, once per light)
 #      GET /api/LaserController/setLaserActive
+#      GET /api/LEDMatrixController/setAllLEDOff  (via led_matrix_off)
 def all_lights_off():
     for name in LIGHTS:
         set_light(name, False)
 
+    led_matrix_off()
 
-# Take one frame and reject empty camera frames.
+
+# Take one frame as greyscale.
+#
+# An all-black frame is deliberately not rejected here. Since all_lights_off
+# also switches off the LED matrix, the dark frame on a rig in a closed
+# enclosure really is every pixel 0, and treating that as a fault would fail
+# the test on exactly the baseline it needs. The brightness check belongs on
+# the bright frame instead, where it is done.
 #
 # API: GET /api/RecordingController/snapNumpyToFastAPI
 #      params: detectorName, resizeFactor -> 200, image/png
@@ -101,11 +137,7 @@ def take_image(detector):
     )
     assert response.status_code == 200, response.text
 
-    image = Image.open(io.BytesIO(response.content)).convert("L")
-    assert image.getextrema()[1] > 0, (
-        "camera returned an all-black frame; acquisition may not be running"
-    )
-    return image
+    return Image.open(io.BytesIO(response.content)).convert("L")
 
 
 # Start camera acquisition for the photon tests.
@@ -213,7 +245,17 @@ def test_light_source_is_visible_to_camera(light_source, detector_name):
         ImageChops.difference(dark, bright)
     ).mean[0]
 
-    print(f"\n{light_source}: pixel_change={change:.2f}")
+    print(
+        f"\n{light_source}: "
+        f"dark_mean={ImageStat.Stat(dark).mean[0]:.2f} "
+        f"bright_mean={ImageStat.Stat(bright).mean[0]:.2f} "
+        f"pixel_change={change:.2f}"
+    )
+
+    assert bright.getextrema()[1] > 0, (
+        f"{light_source} is on but every pixel is still 0; "
+        f"no light reached the sensor"
+    )
 
     assert change >= MIN_CHANGE, (
         f"{light_source}: image changed only by {change:.2f} "

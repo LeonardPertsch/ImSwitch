@@ -2,17 +2,21 @@
 
 # Run the laser hardware tests on a remote machine inside the ImSwitch container.
 #
-# The Python tests discover all lasers/LEDs from the active ImSwitch setup and
-# create one separate pytest test case for every reported laser.
+# This ships the whole folder, so both files run: test_laser_http.py drives the
+# API and reads state back, test_laser_photon.py measures with the camera
+# whether light actually arrived. Each discovers the lasers/LEDs from the active
+# setup and makes one test case per reported laser.
 #
 # Usage:
 #
 #   ./run_laser_test.sh
 #       Run all laser hardware tests.
 #
-#   ./run_laser_test.sh --wire
-#       Run the optional serial diagnostic script that shows the JSON sent
-#       towards the ESP32.
+#   ./run_laser_test.sh --measure
+#       Print the measured brightness per laser and drop the threshold, so a
+#       dim light no longer fails the run. Useful after moving a light or the
+#       optics. A light that produces no signal at all is still reported as a
+#       failure, because that is a result rather than a calibration question.
 #
 # Configuration can be overridden through environment variables:
 #
@@ -56,8 +60,8 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 # Temporary location used inside the container.
 REMOTE_TEST_DIR="${REMOTE_TEST_DIR:-/tmp/laser_tests}"
 
-# Directory containing this script, the pytest files and the optional
-# show_wire_traffic.py diagnostic script.
+# Directory containing this script and the pytest files. The whole directory is
+# shipped, so adding a test file here is enough to have it run.
 LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # pytest turns colour off when stdout is not a tty, and it never is here: both
@@ -66,6 +70,26 @@ LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
 COLOR=""
 if [ -t 1 ]; then COLOR="--color=yes"; fi
 
+# Environment for the tests inside the container. test_laser_photon.py reads
+# the two photon knobs; test_laser_http.py ignores them.
+ENVS="-e IMSWITCH_URL=$IMSWITCH_URL"
+
+if [ -n "${UC2_LASER_VALUE:-}" ]; then
+    ENVS="$ENVS -e UC2_LASER_VALUE=$UC2_LASER_VALUE"
+fi
+
+if [ -n "${PHOTON_MIN_DELTA:-}" ]; then
+    ENVS="$ENVS -e PHOTON_MIN_DELTA=$PHOTON_MIN_DELTA"
+fi
+
+# Report the measured brightness without letting the threshold fail the run.
+# Only meaningful for the photon test; the on/off test is unaffected.
+EXTRA=""
+if [ "${1:-}" = "--measure" ]; then
+    ENVS="$ENVS -e PHOTON_MIN_DELTA=0"
+    EXTRA="-s"
+fi
+
 
 # Pack the local laser-test directory and send it to the remote machine through
 # the existing SSH connection.
@@ -73,7 +97,9 @@ if [ -t 1 ]; then COLOR="--color=yes"; fi
 # The archive is then copied into the ImSwitch container and extracted into a
 # clean temporary directory. This makes the runner independent of the local
 # absolute path of the repository.
-tar --no-xattrs -czf - -C "$LOCAL_DIR" . |
+# The shared conftest.py lives one level up and is picked up from the same
+# directory as the tests, so it is packed alongside them.
+tar --no-xattrs -czf - -C "$LOCAL_DIR/.." conftest.py -C "$LOCAL_DIR" . |
 ssh "$PI" "
     set -e
 
@@ -90,7 +116,7 @@ ssh "$PI" "
          tar xzf /tmp/laser_tests.tgz -C \"$REMOTE_TEST_DIR\"'
 
     docker exec \
-        -e IMSWITCH_URL='$IMSWITCH_URL' \
+        $ENVS \
         '$CONTAINER' \
         '$PYTHON_BIN' -m pytest \
         '$REMOTE_TEST_DIR' \
@@ -98,6 +124,7 @@ ssh "$PI" "
         -ra \
         --tb=line \
         $COLOR \
+        $EXTRA \
         -m hardware \
         -p no:arkitekt_next \
         -p no:cacheprovider \

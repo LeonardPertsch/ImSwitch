@@ -146,7 +146,7 @@ def test_laser_on_off_over_http(safe_laser):
     call(
         "setLaserValue",
         laserName=laser_name,
-        value=500,
+        value=1,
     )
 
     # Enable this laser through the ImSwitch HTTP API.

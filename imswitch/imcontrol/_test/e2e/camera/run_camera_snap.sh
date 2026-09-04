@@ -44,7 +44,16 @@ if [ "${1:-}" = "--curl" ]; then
     exit 0
 fi
 
-ssh "$PI" "cat > /tmp/test_camera_snap_http.py \
-    && docker cp /tmp/test_camera_snap_http.py $CONTAINER:/tmp/ >/dev/null \
-    && docker exec $ENVS $CONTAINER python3 -m pytest /tmp/test_camera_snap_http.py -v --tb=line $COLOR -p no:arkitekt_next" \
-    < "$TEST"
+# Ship the test together with the shared conftest.py from one level up, which
+# colours the progress percentage for skips. pytest reads it from the same
+# directory as the test, so both land in one temporary folder.
+DIR="$(cd "$(dirname "$0")" && pwd)"
+
+tar --no-xattrs -czf - -C "$DIR/.." conftest.py -C "$DIR" test_camera_snap_http.py |
+ssh "$PI" "cat > /tmp/camera_tests.tgz \
+    && docker cp /tmp/camera_tests.tgz $CONTAINER:/tmp/ >/dev/null \
+    && docker exec $CONTAINER sh -c 'rm -rf /tmp/camera_tests \
+        && mkdir -p /tmp/camera_tests \
+        && tar xzf /tmp/camera_tests.tgz -C /tmp/camera_tests' \
+    && docker exec $ENVS $CONTAINER python3 -m pytest /tmp/camera_tests \
+        -v --tb=line $COLOR -p no:arkitekt_next -o markers=hardware"

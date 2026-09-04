@@ -15,15 +15,17 @@ One folder per hardware component:
 
 | Folder | Hardware | Status on this rig |
 |---|---|---|
-| [`camera/`](camera/) | RPi camera (IMX477) via `RecordingController` | works — real sensor data |
-| [`laser/`](laser/) | LED on the UC2 ESP32, LASER3 / GPIO2 | needs the LED mapped in the setup + a restart |
-| [`photon/`](photon/) | LED on, camera measures the light | needs the LED mapped + a restart, like the HTTP laser test |
+| [`camera/`](camera/) | whatever detector the setup provides, via `RecordingController` | works — real sensor data |
+| [`laser/`](laser/) | lasers/LEDs on the UC2 ESP32 | API path works; the 488 laser does not reach the sensor |
+| [`ledmatrix/`](ledmatrix/) | ESP32 LED matrix | works — 3.95 pixel change at intensity 20 |
 
-Add a folder per component as hardware is added (`positioner/`, `ledmatrix/`, …).
+Add a folder per component as hardware is added (`positioner/`, …).
 
-`photon/` is the odd one out: it is not a component but the only test that proves
-light physically reached the sensor. Everything else reads back state that
-software set one call earlier.
+Each light folder holds two levels of proof: an HTTP test that only shows the
+request got through ImSwitch, and a *photon* test that measures with the camera
+whether light actually arrived. Only the latter can fail because of the
+hardware itself — everything else reads back state that software set one call
+earlier.
 
 ## Running everything
 
@@ -33,7 +35,7 @@ container — one SSH connection, one password prompt:
 ```bash
 ./run_all.sh                 # everything
 ./run_all.sh camera          # only camera/
-./run_all.sh laser photon    # several folders
+./run_all.sh laser ledmatrix # several folders
 ```
 
 Every component folder also has its own script:
@@ -41,8 +43,8 @@ Every component folder also has its own script:
 | Script | What it runs |
 |---|---|
 | `camera/run_camera_snap.sh` | the snap test; `--curl` for a quick check into `/tmp/snap.png` |
-| `laser/run_laser_test.sh` | the laser test; `--wire` to watch the JSON go to the ESP32 |
-| `photon/run_photon_test.sh` | the photon test; `--measure` to print dark/bright/ratio without asserting |
+| `laser/run_laser_test.sh` | both laser tests; `--measure` to print the brightness numbers without asserting |
+| `ledmatrix/run_ledmatrix_test.sh` | the LED matrix photon test; `--measure` to print the numbers without asserting |
 
 Override with `PI_HOST`, `IMSWITCH_CONTAINER`, `IMSWITCH_URL`.
 
@@ -75,8 +77,9 @@ IMSWITCH_URL=http://192.168.178.124:8000/imswitch \
 ```
 
 All tests **skip rather than fail** when their hardware or ImSwitch is absent, so
-this is safe to run anywhere. The one exception is `photon/`: once it does run, a
-missing brightness difference is a real failure — that is the point of it.
+this is safe to run anywhere. The exception is the photon tests
+(`laser/test_laser_photon.py`, `ledmatrix/`): once they do run, a missing
+brightness difference is a real failure — that is the point of them.
 
 Every test now goes through the HTTP API, so they coexist happily. The only thing
 that competes for `/dev/ttyUSB0` is `laser/show_wire_traffic.py`, which talks to
