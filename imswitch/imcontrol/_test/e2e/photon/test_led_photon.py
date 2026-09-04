@@ -25,10 +25,19 @@ RESIZE = 0.25
 
 # Call an ImSwitch API endpoint and return JSON.
 #
-# API: GET {BASE_URL}/api/{controller}/{method}
+# Most endpoints are GET; LiveViewController/startLiveView is the one POST, so
+# the verb is a parameter rather than a second copy of this function.
+#
+# A 200 does not always mean the call did what was asked - LiveViewController
+# reports refusals in the body with status 200 - so callers that care have to
+# check the returned status field as well.
+#
+# API: GET|POST {BASE_URL}/api/{controller}/{method}
 #      every call in this file except take_image goes through here
-def api(controller, method, **params):
-    response = requests.get(
+def api(controller, method, http="GET", **params):
+    send = requests.post if http == "POST" else requests.get
+
+    response = send(
         f"{BASE_URL}/api/{controller}/{method}",
         params=params,
         timeout=30,
@@ -101,19 +110,58 @@ def take_image(detector):
 
 # Start camera acquisition for the photon tests.
 #
-# API (setup):    GET /api/ViewController/setLiveViewActive   (active=True)
-# API (teardown): GET /api/LaserController/setLaserValue      (via all_lights_off)
-#                 GET /api/LaserController/setLaserActive
-#                 GET /api/ViewController/setLiveViewActive   (active=False)
+# This uses LiveViewController, not ViewController/setLiveViewActive. The
+# latter is the older path and is broken on these rigs: its _acqHandle is
+# already set at boot while LiveViewController owns the actual stream, so
+# setLiveViewActive(True) returns 200 without starting anything and
+# setLiveViewActive(False) always answers 500 "Invalid or already used
+# handle". LiveViewController reports real state and tolerates a double stop.
+#
+# API (setup):    POST /api/LiveViewController/startLiveView
+#                 GET  /api/LiveViewController/getLiveViewActive
+# API (teardown): GET  /api/LaserController/setLaserValue      (via all_lights_off)
+#                 GET  /api/LaserController/setLaserActive
+#                 GET  /api/LiveViewController/stopLiveView
 @pytest.fixture(scope="module", autouse=True)
-def camera_acquisition():
-    api("ViewController", "setLiveViewActive", active=True)
+def camera_acquisition(detector_name):
+    started = api(
+        "LiveViewController",
+        "startLiveView",
+        http="POST",
+        detectorName=detector_name,
+    )
+    status = started.get("status")
+
+    # startLiveView answers 200 even when it declines, so the body decides.
+    # A long exposure is a refusal rather than a failure: passing force=True
+    # would start the stream anyway, but frames would then be slower than the
+    # settle time this test assumes, so measuring light would be unreliable.
+    if status == "long_exposure":
+        pytest.skip(
+            f"{detector_name}: exposure too long for live view: {started}"
+        )
+
+    # "already_running" is fine - the frontend or an earlier run may hold the
+    # stream, and an active stream is all this module needs.
+    assert status in ("success", "already_running"), (
+        f"{detector_name}: startLiveView did not start a stream: {started}"
+    )
+
+    assert api("LiveViewController", "getLiveViewActive") is True, (
+        f"{detector_name}: getLiveViewActive is False right after "
+        f"startLiveView returned {status!r}"
+    )
+
     time.sleep(1)
 
     yield
 
     all_lights_off()
-    api("ViewController", "setLiveViewActive", active=False)
+
+    # Only hand back what was taken. A stream that was already running before
+    # this module belongs to whoever started it, so leave it alone.
+    if status == "success":
+        api("LiveViewController", "stopLiveView", detectorName=detector_name)
 
 
 # Use the requested detector or the first configured one.
