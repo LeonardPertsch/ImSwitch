@@ -1,19 +1,38 @@
 """Shared pytest behaviour for the e2e suite."""
-
+import io
 import os
 import time
 
 import pytest
 import requests
-
+from PIL import Image, ImageChops, ImageStat
 
 BASE_URL = os.environ.get("IMSWITCH_URL", "http://localhost:8001")
 
 # How long setDetectorExposureOnce stays in auto before its timer restores
 # manual mode. The wait below has to outlast it, or the detector is still in
 # 'once' while the first frame is taken.
-AUTO_EXPOSURE_RESET_MS = int(os.environ.get("AUTO_EXPOSURE_RESET_MS", "1500"))
+AUTO_EXPOSURE_RESET_MS = int(
+    os.environ.get("AUTO_EXPOSURE_RESET_MS", "1500")
+)
 
+PHOTON_MIN_DELTA = float(
+    os.environ.get("PHOTON_MIN_DELTA", "1.5")
+)
+
+PHOTON_NOISE_FACTOR = float(
+    os.environ.get("PHOTON_NOISE_FACTOR", "1.5")
+)
+
+PHOTON_NOISE_SAMPLES = int(
+    os.environ.get("PHOTON_NOISE_SAMPLES", "6")
+)
+
+PHOTON_NOISE_DELAY = float(
+    os.environ.get("PHOTON_NOISE_DELAY", "0.5")
+)
+
+PHOTON_RESIZE = 0.25
 
 # Colour the progress percentage yellow once something has been skipped.
 #
@@ -107,6 +126,76 @@ def _exposure_ms(detector):
     parameters = response.json().get("parameters") or {}
     return (parameters.get("exposure") or {}).get("value")
 
+@pytest.fixture(scope="session")
+def take_image():
+    """Capture one greyscale camera frame."""
+
+    def run(detector):
+        response = requests.get(
+            f"{BASE_URL}/api/RecordingController/snapNumpyToFastAPI",
+            params={
+                "detectorName": detector,
+                "resizeFactor": PHOTON_RESIZE,
+            },
+            timeout=60,
+        )
+
+        assert response.status_code == 200, response.text
+
+        return Image.open(
+            io.BytesIO(response.content)
+        ).convert("L")
+
+    return run
+
+
+@pytest.fixture(scope="session")
+def image_difference():
+    """Mean absolute pixel difference between two frames."""
+
+    def run(first, second):
+        return ImageStat.Stat(
+            ImageChops.difference(first, second)
+        ).mean[0]
+
+    return run
+
+
+@pytest.fixture
+def measure_dark_baseline(take_image, image_difference):
+    """Measure current camera noise and return a dark reference frame."""
+
+    def run(detector):
+        previous = take_image(detector)
+        drifts = []
+
+        for _ in range(PHOTON_NOISE_SAMPLES - 1):
+            time.sleep(PHOTON_NOISE_DELAY)
+
+            current = take_image(detector)
+
+            drift = image_difference(previous, current)
+            drifts.append(drift)
+
+            previous = current
+
+        noise_floor = max(drifts)
+
+        required_change = max(
+            PHOTON_MIN_DELTA,
+            noise_floor * PHOTON_NOISE_FACTOR,
+        )
+
+        print(
+            f"\n{detector} dark noise: "
+            f"drifts={[round(value, 2) for value in drifts]}, "
+            f"noise_floor={noise_floor:.2f}, "
+            f"required_change={required_change:.2f}"
+        )
+
+        return previous, noise_floor, required_change
+
+    return run
 
 # One-shot auto exposure, run at most once per pytest session.
 #

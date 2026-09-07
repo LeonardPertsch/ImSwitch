@@ -1,13 +1,12 @@
 
 """Check that every configured light source is visible to the camera."""
 
-import io
 import os
 import time
 
 import pytest
 import requests
-from PIL import Image, ImageChops, ImageStat
+from PIL import ImageStat
 
 
 # Base URL of the ImSwitch HTTP API, as seen from wherever this test runs.
@@ -17,10 +16,9 @@ from PIL import Image, ImageChops, ImageStat
 BASE_URL = os.environ.get("IMSWITCH_URL", "http://localhost:8001")
 DETECTOR = os.environ.get("IMSWITCH_DETECTOR")
 LASER_VALUE = int(os.environ.get("UC2_LASER_VALUE", "1000"))
-MIN_CHANGE = float(os.environ.get("PHOTON_MIN_DELTA", "1.5"))
 
 SETTLE = 0.1
-RESIZE = 0.25
+
 
 
 # Call an ImSwitch API endpoint and return JSON.
@@ -145,25 +143,6 @@ def all_lights_off():
     led_matrix_off()
 
 
-# Take one frame as greyscale.
-#
-# An all-black frame is valid input. With every light off, including the LED
-# matrix, the dark frame in a closed enclosure is every pixel 0 - that is the
-# baseline the test needs, not a fault. The brightness check sits on the bright
-# frame, where a black result does mean something is wrong.
-#
-# API: GET /api/RecordingController/snapNumpyToFastAPI
-#      params: detectorName, resizeFactor -> 200, image/png
-#      called directly, not through api(), because the body is PNG and not JSON
-def take_image(detector):
-    response = requests.get(
-        f"{BASE_URL}/api/RecordingController/snapNumpyToFastAPI",
-        params={"detectorName": detector, "resizeFactor": RESIZE},
-        timeout=30,
-    )
-    assert response.status_code == 200, response.text
-
-    return Image.open(io.BytesIO(response.content)).convert("L")
 
 
 # Keep the camera streaming for the duration of this module.
@@ -260,7 +239,14 @@ def light_source(request):
     [pytest.param(name, id=name) for name in LIGHTS],
     indirect=True,
 )
-def test_light_source_is_visible_to_camera(light_source, detector_name, auto_exposure):
+def test_light_source_is_visible_to_camera(
+    light_source,
+    detector_name,
+    auto_exposure,
+    measure_dark_baseline,
+    take_image,
+    image_difference,
+    ):
     # Before the baseline, never between the two frames: dark and bright have
     # to be taken at the same exposure, otherwise the measured change is partly
     # the exposure changing rather than light arriving. The session fixture
@@ -268,20 +254,22 @@ def test_light_source_is_visible_to_camera(light_source, detector_name, auto_exp
     # it and every light is then measured at the same exposure.
     auto_exposure(detector_name)
 
-    dark = take_image(detector_name)
+    dark, noise_floor, required_change = measure_dark_baseline(
+        detector_name
+    )
 
     set_light(light_source, True)
+
     bright = take_image(detector_name)
 
-    change = ImageStat.Stat(
-        ImageChops.difference(dark, bright)
-    ).mean[0]
-
+    change = image_difference(dark, bright)
     print(
         f"\n{light_source}: "
         f"dark_mean={ImageStat.Stat(dark).mean[0]:.2f} "
         f"bright_mean={ImageStat.Stat(bright).mean[0]:.2f} "
-        f"pixel_change={change:.2f}"
+        f"noise_floor={noise_floor:.2f} "
+        f"pixel_change={change:.2f} "
+        f"required={required_change:.2f}"
     )
 
     assert bright.getextrema()[1] > 0, (
@@ -289,7 +277,8 @@ def test_light_source_is_visible_to_camera(light_source, detector_name, auto_exp
         f"no light reached the sensor"
     )
 
-    assert change >= MIN_CHANGE, (
-        f"{light_source}: image changed only by {change:.2f} "
-        f"(need >= {MIN_CHANGE})"
+    assert change >= required_change, (
+        f"{light_source}: image changed only by {change:.2f}; "
+        f"camera noise floor is {noise_floor:.2f}, "
+        f"need >= {required_change:.2f}"
     )

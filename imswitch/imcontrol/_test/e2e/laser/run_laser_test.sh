@@ -92,7 +92,7 @@ ENVS="-e IMSWITCH_URL=$IMSWITCH_URL"
 # os.environ lookups in those files exactly: an unread name is handed to docker
 # and then silently ignored.
 KNOBS="IMSWITCH_DETECTOR UC2_LASER_VALUE PHOTON_MIN_DELTA
-       AUTO_EXPOSURE_RESET_MS"
+       AUTO_EXPOSURE_RESET_MS PHOTON_SETTLE_TOLERANCE"
 
 for knob in $KNOBS; do
     [ -n "${!knob:-}" ] && ENVS="$ENVS -e $knob=${!knob}"
