@@ -51,13 +51,41 @@ def api(controller, method, http="GET", **params):
 # API: GET /api/LaserController/getLaserNames
 def get_lights():
     try:
-        return api("LaserController", "getLaserNames")
+        result = api(
+            "AcceptanceTestController",
+            "getAvailableLightSources",
+        )
+
+        return [
+            source["name"]
+            for source in result.get("light_sources", [])
+        ]
+
     except requests.RequestException:
         return []
-
-
 LIGHTS = get_lights()
 
+
+@pytest.fixture(scope="module")
+def camera_status(detector_name):
+    status = api(
+        "SettingsController",
+        "getCameraStatus",
+        detectorName=detector_name,
+    )
+
+    if "error" in status:
+        pytest.skip(
+            f"{detector_name}: getCameraStatus failed: {status['error']}"
+        )
+
+    if status.get("isMock") or str(status.get("model", "")).lower() == "mock":
+        pytest.skip(
+            f"{detector_name}: ImSwitch served a mock camera "
+            f"(model={status.get('model')!r}), no hardware attached"
+        )
+
+    return status
 
 # Switch one light source on or off.
 #
@@ -151,7 +179,7 @@ def take_image(detector):
 #                 GET  /api/LaserController/setLaserActive
 #                 GET  /api/LiveViewController/stopLiveView
 @pytest.fixture(scope="module", autouse=True)
-def camera_acquisition(detector_name):
+def camera_acquisition(detector_name, camera_status):
     started = api(
         "LiveViewController",
         "startLiveView",

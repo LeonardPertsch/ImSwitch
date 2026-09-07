@@ -45,11 +45,16 @@ def call(method, **params):
 def get_laser_params():
     try:
         response = requests.get(
-            f"{LASER_API}/getLaserNames",
+            f"{BASE_URL}/api/AcceptanceTestController/getAvailableLightSources",
             timeout=5,
         )
         response.raise_for_status()
-        lasers = response.json()
+
+        data = response.json()
+        lasers = [
+            source["name"]
+            for source in data.get("light_sources", [])
+        ]
 
     except requests.RequestException as exc:
         return [

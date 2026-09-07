@@ -192,6 +192,27 @@ def detector_name():
     return DETECTOR or detectors[0]
 
 
+@pytest.fixture(scope="module")
+def camera_status(detector_name):
+    status = api(
+        "SettingsController",
+        "getCameraStatus",
+        detectorName=detector_name,
+    )
+
+    if "error" in status:
+        pytest.skip(
+            f"{detector_name}: getCameraStatus failed: {status['error']}"
+        )
+
+    if status.get("isMock") or str(status.get("model", "")).lower() == "mock":
+        pytest.skip(
+            f"{detector_name}: ImSwitch served a mock camera "
+            f"(model={status.get('model')!r}), no hardware attached"
+        )
+
+    return status
+
 # Keep the camera streaming for the duration of this module.
 #
 # LiveViewController owns the stream and reports real state. The older
@@ -223,7 +244,7 @@ def led_matrix_available():
 
 
 @pytest.fixture(scope="module", autouse=True)
-def camera_acquisition(led_matrix_available, detector_name):
+def camera_acquisition(led_matrix_available, detector_name, camera_status):
     started = api(
         "LiveViewController",
         "startLiveView",
