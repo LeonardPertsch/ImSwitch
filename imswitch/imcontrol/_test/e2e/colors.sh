@@ -11,4 +11,3 @@
 
 COLOR=""
 if [ -t 1 ]; then COLOR="--color=yes"; fi
-<y

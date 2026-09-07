@@ -16,9 +16,6 @@ from PIL import Image, ImageChops, ImageStat
 BASE_URL = os.environ.get("IMSWITCH_URL", "http://localhost:8001")
 DETECTOR = os.environ.get("IMSWITCH_DETECTOR")
 
-# Measured on this rig: intensity 20 lifts the frame mean from 0.00 to roughly
-# 3.6, comfortably clear of MIN_CHANGE. Raise it if the matrix sits further
-# from the sensor or behind more optics.
 INTENSITY = int(os.environ.get("LEDMATRIX_INTENSITY", "20"))
 MIN_CHANGE = float(os.environ.get("PHOTON_MIN_DELTA", "1.5"))
 
