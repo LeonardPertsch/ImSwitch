@@ -48,6 +48,24 @@ Every component folder also has its own script:
 
 Override with `PI_HOST`, `IMSWITCH_CONTAINER`, `IMSWITCH_URL`.
 
+Every runner also forwards the test knobs of the folders it runs — the ones
+listed in each component README — but only when they are actually set, so an
+unset knob keeps the default the test itself defines:
+
+```bash
+PHOTON_MIN_DELTA=3 LEDMATRIX_INTENSITY=40 ./run_all.sh ledmatrix
+```
+
+Each script keeps that list in a `KNOBS` variable, and the names there have to
+match the `os.environ` lookups in the test files exactly: a name nothing reads
+is passed into the container and then silently ignored, so the knob looks
+supported while doing nothing.
+
+`colors.sh` in this folder is sourced by all four runners. It only decides
+whether pytest gets `--color=yes`: colour is off by default because neither
+`ssh` nor `docker exec` gives pytest a tty, and forcing it back on is wrong
+when the run is being redirected to a file.
+
 ## The two URLs
 
 `IMSWITCH_URL` always means *ImSwitch as seen from wherever the request is

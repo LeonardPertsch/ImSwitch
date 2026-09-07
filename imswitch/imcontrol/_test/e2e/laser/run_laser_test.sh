@@ -36,6 +36,9 @@
 #   REMOTE_TEST_DIR
 #       Temporary directory used inside the container for the tests.
 #
+# The test knobs themselves are listed in KNOBS below and documented with their
+# defaults in README.md.
+#
 # Example:
 #
 #   PI_HOST=pi@192.168.1.20 \
@@ -65,31 +68,35 @@ REMOTE_TEST_DIR="${REMOTE_TEST_DIR:-/tmp/laser_tests}"
 # shipped, so adding a test file here is enough to have it run.
 LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# pytest turns colour off when stdout is not a tty, and it never is here: both
-# ssh and docker exec are run without one. Force it back on, but only while we
-# are actually on a terminal, so redirecting to a file stays clean text.
-COLOR=""
-if [ -t 1 ]; then COLOR="--color=yes"; fi
-
-# Environment for the tests inside the container. test_laser_photon.py reads
-# the two photon knobs; test_laser_http.py ignores them.
-ENVS="-e IMSWITCH_URL=$IMSWITCH_URL"
-
-if [ -n "${UC2_LASER_VALUE:-}" ]; then
-    ENVS="$ENVS -e UC2_LASER_VALUE=$UC2_LASER_VALUE"
-fi
-
-if [ -n "${PHOTON_MIN_DELTA:-}" ]; then
-    ENVS="$ENVS -e PHOTON_MIN_DELTA=$PHOTON_MIN_DELTA"
-fi
+# Shared colour setup, from the suite root one level up.
+. "$LOCAL_DIR/../colors.sh"
 
 # Report the measured brightness without letting the threshold fail the run.
 # Only meaningful for the photon test; the on/off test is unaffected.
+#
+# This overwrites the knob before it is forwarded, rather than appending a
+# second -e after: one name then carries one value, so nothing depends on how
+# docker resolves the same name given twice.
 EXTRA=""
 if [ "${1:-}" = "--measure" ]; then
-    ENVS="$ENVS -e PHOTON_MIN_DELTA=0"
+    PHOTON_MIN_DELTA=0
     EXTRA="-s"
 fi
+
+# Environment for the tests inside the container.
+ENVS="-e IMSWITCH_URL=$IMSWITCH_URL"
+
+# Knobs test_laser_photon.py and the shared conftest.py read, forwarded only
+# when actually set so an unset one keeps the default the test defines.
+# test_laser_http.py ignores all of them. The names have to match the
+# os.environ lookups in those files exactly: an unread name is handed to docker
+# and then silently ignored.
+KNOBS="IMSWITCH_DETECTOR UC2_LASER_VALUE PHOTON_MIN_DELTA
+       AUTO_EXPOSURE_RESET_MS"
+
+for knob in $KNOBS; do
+    [ -n "${!knob:-}" ] && ENVS="$ENVS -e $knob=${!knob}"
+done
 
 
 # Pack the local laser-test directory and send it to the remote machine through

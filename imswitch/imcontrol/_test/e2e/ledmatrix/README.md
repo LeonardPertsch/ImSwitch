@@ -70,6 +70,7 @@ every run.
 | `PHOTON_MIN_DELTA` | 1.5 | pixel change required to pass |
 | `PHOTON_SETTLE_TOLERANCE` | 0.4 | baseline counts as quiet below this |
 | `IMSWITCH_DETECTOR` | first reported | detector to snap from |
+| `AUTO_EXPOSURE_RESET_MS` | 1500 | how long the one-shot auto exposure stays in auto |
 | `IMSWITCH_URL` | `http://localhost:8001` | API base, see [`../README.md`](../README.md) |
 
 Also `PI_HOST` and `IMSWITCH_CONTAINER` for the runner itself.

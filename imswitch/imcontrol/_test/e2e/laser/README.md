@@ -95,6 +95,7 @@ it run.
 | `UC2_LASER_VALUE` | 1000 | value each light is set to when switched on |
 | `PHOTON_MIN_DELTA` | 1.5 | pixel change required to pass |
 | `IMSWITCH_DETECTOR` | first reported | detector to snap from |
+| `AUTO_EXPOSURE_RESET_MS` | 1500 | how long the one-shot auto exposure stays in auto |
 | `IMSWITCH_URL` | `http://localhost:8001` | API base, see [`../README.md`](../README.md) |
 
 Also `PI_HOST` and `IMSWITCH_CONTAINER` for the runner itself.
