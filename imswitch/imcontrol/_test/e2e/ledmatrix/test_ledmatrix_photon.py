@@ -15,7 +15,7 @@ from PIL import ImageStat
 BASE_URL = os.environ.get("IMSWITCH_URL", "http://localhost:8001")
 DETECTOR = os.environ.get("IMSWITCH_DETECTOR")
 
-INTENSITY = int(os.environ.get("LEDMATRIX_INTENSITY", "100"))
+INTENSITY = int(os.environ.get("LEDMATRIX_INTENSITY", "500"))
 
 SETTLE = 0.5
 
