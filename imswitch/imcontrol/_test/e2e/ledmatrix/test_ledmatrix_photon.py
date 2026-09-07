@@ -50,6 +50,23 @@ def api(controller, method, http="GET", **params):
     return response.json()
 
 
+
+#helpermethod for getting the available controllers from the ImSwitch API
+#because there is no way to know if the LEDMatrixController is available otherwise
+def get_available_controllers():
+    response = requests.get(
+        f"{BASE_URL}/api/getAvailableControllers",
+        timeout=30,
+    )
+
+    assert response.status_code == 200, (
+        f"getAvailableControllers -> "
+        f"{response.status_code}: {response.text}"
+    )
+
+    return response.json()
+
+
 # Call one LEDMatrixController endpoint and hand back the raw response.
 #
 # The controller exposes setters only, with no way to ask whether the matrix is
@@ -225,23 +242,24 @@ def camera_status(detector_name):
 #                 GET  /api/LiveViewController/stopLiveView
 @pytest.fixture(scope="module")
 def led_matrix_available():
-    """Skip the module unless this setup actually has an LED matrix.
+    """Skip the module unless this setup actually has an LED matrix."""
 
-    The single place allowed to skip on a missing controller. Probing once here
-    keeps pytest.skip out of matrix_off, which also runs from teardown, where
-    skipping would report the test a second time. It runs before live view is
-    started so a rig without a matrix does not get a stream it will not use.
-    """
     try:
-        response = matrix("setAllLEDOff")
+        controllers = get_available_controllers()
     except requests.RequestException as exc:
         pytest.skip(f"ImSwitch not reachable at {BASE_URL}: {exc}")
 
-    if response.status_code == 404:
-        pytest.skip("no LEDMatrixController in this setup (setAllLEDOff -> 404)")
+    # Support either a plain list or a dictionary response.
+    if isinstance(controllers, dict):
+        controllers = controllers.get(
+            "controllers",
+            controllers.get("availableControllers", []),
+        )
 
-    assert response.status_code == 200, response.text
+    if "LEDMatrixController" not in controllers:
+        pytest.skip("LEDMatrixController not available in this setup")
 
+        
 
 @pytest.fixture(scope="module", autouse=True)
 def camera_acquisition(led_matrix_available, detector_name, camera_status):
