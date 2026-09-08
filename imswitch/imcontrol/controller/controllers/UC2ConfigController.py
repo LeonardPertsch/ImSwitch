@@ -3369,6 +3369,7 @@ class UC2ConfigController(ImConWidgetController):
         :return: Response from the device containing digitalin status
         """
         try:
+            digitalinid = int(digitalinid)
             return self._master.UC2ConfigManager._digitalIn.get_digitalin(
                 digitalinid=digitalinid,
                 timeout=timeout,

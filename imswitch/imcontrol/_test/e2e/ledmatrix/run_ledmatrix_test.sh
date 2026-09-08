@@ -46,7 +46,7 @@ done
 # Ship the test together with the shared conftest.py from one level up, which
 # colours the progress percentage for skips. pytest reads it from the same
 # directory as the test, so both land in one temporary folder.
-tar --no-xattrs -czf - -C "$DIR/.." conftest.py -C "$DIR" test_ledmatrix_photon.py test_ledmatrix_http.py |
+tar --no-xattrs -czf - -C "$DIR/.." conftest.py -C "$DIR" test_ledmatrix_photon.py test_ledmatrix_smoke.py |
 ssh "$PI" "cat > /tmp/ledmatrix_tests.tgz \
     && docker cp /tmp/ledmatrix_tests.tgz $CONTAINER:/tmp/ >/dev/null \
     && docker exec $CONTAINER sh -c 'rm -rf /tmp/ledmatrix_tests \

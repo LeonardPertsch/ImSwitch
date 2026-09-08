@@ -6,13 +6,13 @@ reported laser.
 
 | Test | What a pass proves |
 |---|---|
-| `test_laser_http.py` | the request travelled through ImSwitch without error |
+| `test_laser_switching.py` | the request travelled through ImSwitch without error |
 | `test_laser_photon.py` | light physically hit the camera sensor |
 
 The LED matrix is not covered here — it is served by `LEDMatrixController` and
 never appears in `getLaserNames`. See [`../ledmatrix/`](../ledmatrix/).
 
-## `test_laser_http.py`
+## `test_laser_switching.py`
 
 Switches each light through ImSwitch and asserts on the read-back:
 

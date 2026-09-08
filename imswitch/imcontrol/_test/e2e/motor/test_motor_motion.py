@@ -38,7 +38,7 @@ def get_axes():
     "positioner,axis",
     get_axes(),
 )
-def test_motor_move_http(positioner, axis):
+def test_axis_moves_by_step(positioner, axis):
     before = api("getPositionerPositions")[positioner][axis]
 
     try:

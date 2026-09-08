@@ -2,7 +2,7 @@
 
 Whatever detector the active setup provides, via `RecordingController`.
 
-## `test_camera_snap_http.py`
+## `test_camera_capture.py`
 
 The only test in `e2e/` that reaches actual hardware data. It snaps a frame over
 HTTP:
@@ -82,7 +82,7 @@ Running pytest directly works too, given pytest and requests and a reachable
 ImSwitch:
 
 ```bash
-IMSWITCH_URL=http://<pi>:8000/imswitch python3 -m pytest test_camera_snap_http.py -v
+IMSWITCH_URL=http://<pi>:8000/imswitch python3 -m pytest test_camera_capture.py -v
 ```
 
 ## Measured resize factors

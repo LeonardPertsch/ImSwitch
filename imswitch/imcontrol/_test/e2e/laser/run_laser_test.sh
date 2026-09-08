@@ -2,7 +2,7 @@
 
 # Run the laser hardware tests on a remote machine inside the ImSwitch container.
 #
-# This ships the whole folder, so both files run: test_laser_http.py drives the
+# This ships the whole folder, so both files run: test_laser_switching.py drives the
 # API and reads state back, test_laser_photon.py measures with the camera
 # whether light actually arrived. Each discovers the lasers/LEDs from the active
 # setup and makes one test case per reported laser.
@@ -88,7 +88,7 @@ ENVS="-e IMSWITCH_URL=$IMSWITCH_URL"
 
 # Knobs test_laser_photon.py and the shared conftest.py read, forwarded only
 # when actually set so an unset one keeps the default the test defines.
-# test_laser_http.py ignores all of them. The names have to match the
+# test_laser_switching.py ignores all of them. The names have to match the
 # os.environ lookups in those files exactly: an unread name is handed to docker
 # and then silently ignored.
 KNOBS="IMSWITCH_DETECTOR UC2_LASER_VALUE PHOTON_MIN_DELTA

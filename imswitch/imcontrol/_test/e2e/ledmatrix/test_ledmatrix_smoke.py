@@ -25,7 +25,7 @@ def get_available_controllers():
 
 
 @pytest.mark.hardware
-def test_led_matrix_http():
+def test_all_leds_off_is_accepted():
     controllers = get_available_controllers()
 
     # Depending on the ImSwitch response format, controllers may be returned

@@ -144,7 +144,7 @@ def safe_laser(request):
     get_laser_params(),
     indirect=True,
 )
-def test_laser_on_off_over_http(safe_laser):
+def test_laser_reports_active(safe_laser):
     laser_name = safe_laser
 
     # Set a positive value for this laser before enabling it.

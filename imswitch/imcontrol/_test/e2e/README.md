@@ -21,7 +21,7 @@ One folder per hardware component:
 
 Add a folder per component as hardware is added (`positioner/`, …).
 
-Light sources are tested at two levels. An HTTP test shows the request reached
+Light sources are tested at two levels. A switching test shows the request reached
 ImSwitch and came back without error; a *photon* test switches the light on and
 measures with the camera whether it arrived. Only the photon tests can fail
 because of the hardware itself — everything else reads back state that software
@@ -80,7 +80,7 @@ made* — which is not the same address in both directions:
 `imswitch-server-1` there is nothing on :8000, and on your machine `localhost`
 is your machine.
 
-All three tests therefore default to `http://localhost:8001`, and every runner
+All tests therefore default to `http://localhost:8001`, and every runner
 passes that same value in explicitly. The one place that needs the outside URL
 is `camera/run_camera_snap.sh --curl`, which fires from your machine rather than
 from the container; it has its own `IMSWITCH_EXTERNAL_URL`, derived from
