@@ -1,6 +1,20 @@
 #!/usr/bin/env bash
 
-# Run motor HTTP tests on the remote Pi inside the ImSwitch container.
+# Run the motor tests on the remote Pi inside the ImSwitch container.
+#
+#   ./run_motor_test.sh                 # every motor test
+#   ./run_motor_test.sh '/tmp/motor_tests/test_motor_motion.py'
+#   ./run_motor_test.sh '/tmp/motor_tests/test_motor_endstop_approach.py::test_axis_reaches_endstop[Y]'
+#
+# The argument is a pytest target *as seen inside the container*, so it starts
+# with REMOTE_TEST_DIR. Quote it: the [Y] of a parametrised id is a glob.
+#
+# test_motor_endstop_approach.py drives an axis into its endstop and stays
+# disabled unless ENDSTOP_APPROACH is set, so a plain run never moves into a
+# limit:
+#
+#   ENDSTOP_APPROACH=1 ENDSTOP_MAX_TRAVEL_UM=500 ENDSTOP_STEP_UM=100 \
+#     ./run_motor_test.sh '/tmp/motor_tests/test_motor_endstop_approach.py::test_axis_reaches_endstop[Y]'
 
 set -euo pipefail
 
@@ -14,9 +28,31 @@ LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 . "$LOCAL_DIR/../colors.sh"
 
+# Every knob the tests in this folder read, forwarded only when it is actually
+# set in the environment, so an unset one keeps the default the test defines.
+# Repeating the defaults here instead would mean two places to keep in sync.
+#
+# ENVS has to stay a SINGLE LINE: it is interpolated into the ssh command
+# below, where an embedded newline would end the `docker exec` line early and
+# leave it without arguments.
+KNOBS="ENDSTOP_APPROACH ENDSTOP_MAX_TRAVEL_UM ENDSTOP_STEP_UM ENDSTOP_READ_TIMEOUT"
+
 ENVS="-e IMSWITCH_URL=$IMSWITCH_URL"
 
-tar --no-xattrs -czf - \
+for knob in $KNOBS; do
+    value="${!knob:-}"
+
+    if [ -n "$value" ]; then
+        ENVS="$ENVS -e $knob=$value"
+    fi
+done
+
+# Optional pytest target, defaulting to the whole folder.
+TARGET="${1:-$REMOTE_TEST_DIR}"
+
+# ustar carries no pax extended headers, so GNU tar on the Pi does not
+# warn about the SCHILY.fflags that macOS bsdtar would otherwise write.
+tar --no-xattrs --format=ustar -czf - \
     -C "$LOCAL_DIR/.." conftest.py \
     -C "$LOCAL_DIR" . |
 ssh "$PI" "
@@ -38,7 +74,8 @@ ssh "$PI" "
         $ENVS \
         '$CONTAINER' \
         '$PYTHON_BIN' -m pytest \
-        '$REMOTE_TEST_DIR' \
+        '$TARGET' \
+        -s \
         -v \
         -ra \
         --tb=line \
