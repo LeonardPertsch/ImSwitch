@@ -77,31 +77,19 @@ def endstop_value(payload, digitalinid):
 
 
 def read_endstop(digitalinid):
-    """Read one endstop. Returns (value, detail), value being 0, 1 or None.
+    """Read one endstop. Returns (value, payload), value being 0, 1 or None.
 
-    getDigitalInReliable triggers a fresh read and waits for the serial
-    reader's digitalin callback, which also works on firmware that answers
-    /digitalin_get without echoing the request's qid. getDigitalIn only reads
-    back where that qid does come back, so it is the fallback, not the default.
+    The firmware answers /digitalin_get with the request's qid, so UC2-REST
+    can match the reply to the request and getDigitalIn reads back directly.
     """
-    reliable = api(
-        "UC2ConfigController",
-        "getDigitalInReliable",
-        digitalinid=digitalinid,
-        timeout=READ_TIMEOUT,
-    )
-
-    if isinstance(reliable, dict) and reliable.get("fresh"):
-        return reliable.get("value"), reliable
-
-    legacy = api(
+    payload = api(
         "UC2ConfigController",
         "getDigitalIn",
         digitalinid=digitalinid,
         timeout=READ_TIMEOUT,
     )
 
-    return endstop_value(legacy, digitalinid), reliable if reliable is not None else legacy
+    return endstop_value(payload, digitalinid), payload
 
 
 @pytest.mark.hardware

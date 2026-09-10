@@ -24,7 +24,16 @@ def api(method, **params):
 
 
 def get_axes():
-    positions = api("getPositionerPositions")
+    """Every axis the setup reports, as (positioner, axis) pairs.
+
+    Returns [] rather than raising: pytest evaluates parametrize arguments
+    while collecting, so an exception here aborts collection for the whole
+    suite instead of skipping this one file.
+    """
+    try:
+        positions = api("getPositionerPositions")
+    except Exception:
+        return []
 
     return [
         (positioner, axis)
@@ -36,9 +45,12 @@ def get_axes():
 @pytest.mark.hardware
 @pytest.mark.parametrize(
     "positioner,axis",
-    get_axes(),
+    get_axes() or [(None, None)],
 )
 def test_axis_moves_by_step(positioner, axis):
+    if positioner is None:
+        pytest.skip("no positioner axes reported — ImSwitch or setup unavailable")
+
     before = api("getPositionerPositions")[positioner][axis]
 
     try:
