@@ -2,12 +2,18 @@
 
 Two tests on the same lights, at two different levels of proof. Both discover
 the lights from `LaserController/getLaserNames` and make one test case per
-reported laser.
+reported laser — except that the photon test keeps only the LEDs.
 
-| Test | What a pass proves |
-|---|---|
-| `test_laser_switching.py` | the request travelled through ImSwitch without error |
-| `test_laser_photon.py` | light physically hit the camera sensor |
+| Test | Covers | What a pass proves |
+|---|---|---|
+| `test_laser_switching.py` | every light source | the request travelled through ImSwitch without error |
+| `test_laser_photon.py` | LEDs only | light physically hit the camera sensor |
+
+**Why the photon test skips lasers.** On this rig the 488 laser is mounted so
+that its beam never reaches the sensor, so a photon measurement on it fails for
+an optical reason rather than a software one. The software path for lasers is
+covered by `test_laser_switching.py`. The lasers are still switched off before
+every measurement — one left on would raise the dark frame.
 
 The LED matrix is not covered here — it is served by `LEDMatrixController` and
 never appears in `getLaserNames`. See [`../ledmatrix/`](../ledmatrix/).

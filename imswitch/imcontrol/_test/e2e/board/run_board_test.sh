@@ -16,7 +16,9 @@ LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 ENVS="-e IMSWITCH_URL=$IMSWITCH_URL"
 
-tar --no-xattrs -czf - \
+# ustar carries no pax extended headers, so GNU tar on the Pi does not
+# warn about the SCHILY.fflags that macOS bsdtar would otherwise write.
+tar --no-xattrs --format=ustar -czf - \
     -C "$LOCAL_DIR/.." conftest.py \
     -C "$LOCAL_DIR" . |
 ssh "$PI" "

@@ -1,5 +1,5 @@
 
-"""Check that every configured light source is visible to the camera."""
+"""Check that every configured LED is visible to the camera."""
 
 import os
 import time
@@ -62,6 +62,32 @@ def get_lights():
     except requests.RequestException:
         return []
 LIGHTS = get_lights()
+
+# Only LEDs are asserted on here. A laser on this rig is mounted so that its
+# beam does not reach the sensor, so a photon test on it measures nothing and
+# fails for a reason that has nothing to do with the software path — the path
+# itself is what test_laser_switching.py covers.
+#
+# LIGHTS itself stays complete on purpose: all_lights_off() has to switch the
+# lasers off too, or one left on contaminates the dark frame.
+LEDS = [
+    name
+    for name in LIGHTS
+    if "led" in name.lower() and "laser" not in name.lower()
+]
+
+# An empty parametrize list would report pytest's generic "got empty parameter
+# set"; this says which precondition was missing instead. The skip mark is
+# applied at collection, so the light_source fixture never runs with None.
+LED_PARAMS = [pytest.param(name, id=name) for name in LEDS] or [
+    pytest.param(
+        None,
+        id="no-led",
+        marks=pytest.mark.skip(
+            reason="no LED among the configured light sources"
+        ),
+    )
+]
 
 
 @pytest.fixture(scope="module")
@@ -226,7 +252,7 @@ def light_source(request):
     all_lights_off()
 
 
-# Check each configured light source as a separate pytest test.
+# Check each configured LED as a separate pytest test.
 #
 # API: GET /api/SettingsController/setDetectorExposureOnce  (via auto_exposure)
 #      GET /api/RecordingController/snapNumpyToFastAPI  (dark frame, via take_image)
@@ -236,7 +262,7 @@ def light_source(request):
 @pytest.mark.hardware
 @pytest.mark.parametrize(
     "light_source",
-    [pytest.param(name, id=name) for name in LIGHTS],
+    LED_PARAMS,
     indirect=True,
 )
 def test_light_source_is_visible_to_camera(

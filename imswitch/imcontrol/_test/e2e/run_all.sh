@@ -37,7 +37,9 @@ TARGETS=""
 for arg in "$@"; do TARGETS="$TARGETS /tmp/e2e/$arg"; done
 [ -z "$TARGETS" ] && TARGETS="/tmp/e2e"
 
-tar --no-xattrs -czf - -C "$DIR" . | ssh "$PI" "
+# ustar carries no pax extended headers, so GNU tar on the Pi does not
+# warn about the SCHILY.fflags that macOS bsdtar would otherwise write.
+tar --no-xattrs --format=ustar -czf - -C "$DIR" . | ssh "$PI" "
     cat > /tmp/e2e.tgz &&
     docker cp /tmp/e2e.tgz $CONTAINER:/tmp/e2e.tgz >/dev/null &&
     docker exec $CONTAINER sh -c 'rm -rf /tmp/e2e && mkdir -p /tmp/e2e && tar xzf /tmp/e2e.tgz -C /tmp/e2e' &&

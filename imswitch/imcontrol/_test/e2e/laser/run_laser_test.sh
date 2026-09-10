@@ -107,7 +107,9 @@ done
 # absolute path of the repository.
 # The shared conftest.py lives one level up and is picked up from the same
 # directory as the tests, so it is packed alongside them.
-tar --no-xattrs -czf - -C "$LOCAL_DIR/.." conftest.py -C "$LOCAL_DIR" . |
+# ustar carries no pax extended headers, so GNU tar on the Pi does not
+# warn about the SCHILY.fflags that macOS bsdtar would otherwise write.
+tar --no-xattrs --format=ustar -czf - -C "$LOCAL_DIR/.." conftest.py -C "$LOCAL_DIR" . |
 ssh "$PI" "
     set -e
 
