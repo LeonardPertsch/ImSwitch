@@ -9,7 +9,7 @@ import requests
 
 BASE_URL = os.environ.get("IMSWITCH_URL", "http://localhost:8001")
 
-STEP = 5
+STEP = 10
 SETTLE = 0.5
 
 

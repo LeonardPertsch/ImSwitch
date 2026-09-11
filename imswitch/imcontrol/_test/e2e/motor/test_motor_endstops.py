@@ -5,6 +5,40 @@ asks the board what its limit switches currently read. Run it as a script
 (``python test_motor_endstops.py``) for a live view while pressing the switches.
 """
 
+# Endstop readback notes:
+#
+# This test exposed two independent issues in the digital-input request path:
+#
+# 1. The ESP32 firmware originally returned /digitalin_get responses without
+#    echoing the request qid. UC2-REST therefore could not reliably associate
+#    the response with the request. The firmware was changed so digital-input
+#    responses include the original qid.
+#
+# 2. Older ImSwitch versions forwarded HTTP query parameters unchanged.
+#    Therefore values such as digitalinid=2 and timeout=3.0 arrived as Python
+#    strings. This caused two problems:
+#
+#       timeout="3.0"
+#           -> UC2-REST evaluates `timeout <= 0`
+#           -> TypeError: '<=' not supported between str and int
+#
+#       digitalinid="2"
+#           -> serialized as JSON string "2"
+#           -> ESP32 cJsonTool::getJsonInt() accepts numbers only
+#           -> falls back to the default digital input ID 1
+#
+#    The ImSwitch getDigitalIn() endpoint therefore explicitly converts:
+#
+#       digitalinid = int(digitalinid)
+#       timeout = float(timeout)
+#
+# After both fixes, X/Y/Z digital inputs are returned with the correct ID and
+# qid and this read-only endstop test passes on the FRAME setup.
+#
+# The test intentionally checks that the returned digitalinid matches the
+# requested one; otherwise reading input 1 for every axis could incorrectly
+# make the test pass while Y/Z are never actually queried.
+
 import os
 import time
 
