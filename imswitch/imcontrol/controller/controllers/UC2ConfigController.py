@@ -3370,6 +3370,7 @@ class UC2ConfigController(ImConWidgetController):
         """
         try:
             digitalinid = int(digitalinid)
+            timeout = float(timeout)
             return self._master.UC2ConfigManager._digitalIn.get_digitalin(
                 digitalinid=digitalinid,
                 timeout=timeout,
