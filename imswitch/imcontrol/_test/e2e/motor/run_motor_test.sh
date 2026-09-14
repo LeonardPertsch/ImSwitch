@@ -15,6 +15,10 @@
 #
 #   ENDSTOP_APPROACH=1 ENDSTOP_MAX_TRAVEL_UM=500 ENDSTOP_STEP_UM=100 \
 #     ./run_motor_test.sh '/tmp/motor_tests/test_motor_endstop_approach.py::test_axis_reaches_endstop[Y]'
+#
+# test_motor_motion_camera.py is NOT gated: a plain run parks the stage at the
+# transport position and moves every axis. run_motor_motion_camera.sh runs only
+# that test.
 
 set -euo pipefail
 
@@ -35,7 +39,9 @@ LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
 # ENVS has to stay a SINGLE LINE: it is interpolated into the ssh command
 # below, where an embedded newline would end the `docker exec` line early and
 # leave it without arguments.
-KNOBS="ENDSTOP_APPROACH ENDSTOP_MAX_TRAVEL_UM ENDSTOP_STEP_UM ENDSTOP_READ_TIMEOUT"
+KNOBS="ENDSTOP_APPROACH ENDSTOP_MAX_TRAVEL_UM ENDSTOP_STEP_UM ENDSTOP_READ_TIMEOUT
+       MOTION_CAMERA_DISTANCE_UM MOTION_CAMERA_MIN_PIXELS MOTION_CAMERA_SETTLE_MS
+       MOTION_CAMERA_ROI_PERCENT TRANSPORT_TIMEOUT"
 
 ENVS="-e IMSWITCH_URL=$IMSWITCH_URL"
 

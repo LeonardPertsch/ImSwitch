@@ -1,75 +1,162 @@
+import base64
 import os
 import struct
+from collections import namedtuple
 
 import pytest
 import requests
 
 
-# Base URL of the ImSwitch HTTP API, as seen from wherever this test runs.
-# The runners execute pytest inside the container, where ImSwitch is on its
-# own port without the caddy prefix. From outside the Pi it is
-# http://<pi>:8000/imswitch instead, so set IMSWITCH_URL when running locally.
 BASE_URL = os.environ.get("IMSWITCH_URL", "http://localhost:8001")
 DETECTOR_NAME = os.environ.get("IMSWITCH_DETECTOR")
 
 RESIZE_FACTOR = 0.1
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+JPEG_SOI = b"\xff\xd8"
 
-# Read width and height from the PNG IHDR header.
-#
-# API: none, pure byte parsing on a response body
+# JPEG start-of-frame markers; each carries the image height and width.
+JPEG_SOF_MARKERS = {
+    0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
+    0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF,
+}
+
+# One captured frame. resize_factor is the scaling the endpoint applied, so the
+# resolution test knows what size to expect.
+Frame = namedtuple("Frame", "raw width height resize_factor")
+
+
 def png_dimensions(raw):
     assert raw[:8] == PNG_SIGNATURE, "response body is not a PNG"
     return struct.unpack(">II", raw[16:24])
 
-#Return a detector from the currently active ImSwitch setup.
-#
-# API: GET /api/SettingsController/getDetectorNames
-@pytest.fixture
-def detector_name():
-    try:
-        response = requests.get(
-            f"{BASE_URL}/api/SettingsController/getDetectorNames",
-            timeout=5,
-        )
-        response.raise_for_status()
-        detectors = response.json()
 
-    except requests.RequestException as exc:
-        pytest.skip(f"ImSwitch not reachable at {BASE_URL}: {exc}")
+def jpeg_dimensions(raw):
+    assert raw[:2] == JPEG_SOI, "image is not a JPEG"
+
+    offset = 2
+
+    while offset + 9 <= len(raw):
+        marker = raw[offset + 1]
+        length = struct.unpack(">H", raw[offset + 2:offset + 4])[0]
+
+        if marker in JPEG_SOF_MARKERS:
+            height, width = struct.unpack(">HH", raw[offset + 5:offset + 9])
+            return width, height
+
+        offset += 2 + length
+
+    raise AssertionError("JPEG has no start-of-frame header")
+
+
+def is_observation_camera(detector_name):
+    return "observ" in detector_name.lower()
+
+
+# ---------------------------------------------------------------------------
+# Detector discovery
+# ---------------------------------------------------------------------------
+
+def get_detector_names():
+    """
+    Get all detectors from the currently active ImSwitch setup.
+
+    If IMSWITCH_DETECTOR is set, only that detector is tested.
+
+    API:
+        GET /api/SettingsController/getDetectorNames
+    """
+
+    response = requests.get(
+        f"{BASE_URL}/api/SettingsController/getDetectorNames",
+        timeout=5,
+    )
+    response.raise_for_status()
+
+    detectors = response.json()
 
     if not detectors:
-        pytest.skip("active setup has no detectors")
+        return []
 
-    if DETECTOR_NAME and DETECTOR_NAME not in detectors:
-        pytest.skip(
-            f"detector {DETECTOR_NAME!r} not in setup "
-            f"(available: {detectors})"
+    if DETECTOR_NAME:
+        if DETECTOR_NAME not in detectors:
+            return []
+        return [DETECTOR_NAME]
+
+    return detectors
+
+
+def pytest_generate_tests(metafunc):
+    """
+    Generate one pytest test case per configured detector.
+
+    Example:
+
+        test_camera_returns_image[HikCam]
+        test_camera_returns_image[RPiCam]
+    """
+
+    if "detector_name" not in metafunc.fixturenames:
+        return
+
+    try:
+        detectors = get_detector_names()
+
+    except requests.RequestException as exc:
+        metafunc.parametrize(
+            "detector_name",
+            [
+                pytest.param(
+                    None,
+                    marks=pytest.mark.skip(
+                        reason=f"ImSwitch not reachable at {BASE_URL}: {exc}"
+                    ),
+                )
+            ],
         )
+        return
 
-    return DETECTOR_NAME or detectors[0]
+    if not detectors:
+        reason = "active setup has no detectors"
+
+        if DETECTOR_NAME:
+            reason = (
+                f"detector {DETECTOR_NAME!r} not found in active setup"
+            )
+
+        metafunc.parametrize(
+            "detector_name",
+            [
+                pytest.param(
+                    None,
+                    marks=pytest.mark.skip(reason=reason),
+                )
+            ],
+        )
+        return
+
+    metafunc.parametrize(
+        "detector_name",
+        detectors,
+        ids=detectors,
+    )
 
 
-# Full status of the detector under test, and the gate that keeps the rest of
-# this file off a camera that is not physically there.
-#
-# A detector name does not prove hardware: when the real driver fails to start,
-# HikCamManager catches that and substitutes MockCameraTIS, which serves a black
-# frame with "The camera is not connected" drawn on it. That frame is a valid
-# PNG, so every format check below would happily pass on it.
-#
-# The signal is model == "mock", which is what MockCameraTIS reports and what
-# the OpenCV, Tucsen and ToupCam managers derive their isMock flag from.
-# isMock is checked as well, for managers that set it correctly.
-#
-# isConnected is not used. HikCamManager builds it from an attribute the real
-# CameraHIK object does not have, so it reads False on working hardware, and
-# skipping on it would disable these tests on a rig delivering frames.
-#
-# API: GET /api/SettingsController/getCameraStatus
+# ---------------------------------------------------------------------------
+# Camera status
+# ---------------------------------------------------------------------------
+
 @pytest.fixture
 def camera_status(detector_name):
+    """
+    Full status of the detector under test.
+
+    Also prevents tests from passing against an ImSwitch mock camera.
+
+    API:
+        GET /api/SettingsController/getCameraStatus
+    """
+
     response = requests.get(
         f"{BASE_URL}/api/SettingsController/getCameraStatus",
         params={"detectorName": detector_name},
@@ -77,6 +164,7 @@ def camera_status(detector_name):
     )
 
     assert response.status_code == 200, response.text
+
     status = response.json()
 
     if "error" in status:
@@ -84,7 +172,10 @@ def camera_status(detector_name):
             f"{detector_name}: getCameraStatus failed: {status['error']}"
         )
 
-    if status.get("isMock") or str(status.get("model", "")).lower() == "mock":
+    if (
+        status.get("isMock")
+        or str(status.get("model", "")).lower() == "mock"
+    ):
         pytest.skip(
             f"{detector_name}: ImSwitch served a mock camera "
             f"(model={status.get('model')!r}), no hardware attached"
@@ -93,11 +184,24 @@ def camera_status(detector_name):
     return status
 
 
-# Request one camera frame from ImSwitch.
-#
-# API: GET /api/RecordingController/snapNumpyToFastAPI
-#      params: detectorName, resizeFactor -> 200, image/png
+# ---------------------------------------------------------------------------
+# Snap
+# ---------------------------------------------------------------------------
+
 def snap(detector_name):
+    """
+    Request one camera frame from ImSwitch.
+
+    The observation camera goes through snap_observation(); every other
+    detector through RecordingController.
+
+    API:
+        GET /api/RecordingController/snapNumpyToFastAPI
+    """
+
+    if is_observation_camera(detector_name):
+        return snap_observation()
+
     response = requests.get(
         f"{BASE_URL}/api/RecordingController/snapNumpyToFastAPI",
         params={
@@ -108,53 +212,83 @@ def snap(detector_name):
     )
 
     assert response.status_code == 200, response.text
-    return response
-
-
-
-
-#   Generic camera test.
-#   Proves that ImSwitch can retrieve a PNG frame from the configured detector.
-#   Makes no assumption about the specific camera model or resolution.
-#
-# API: GET /api/SettingsController/getDetectorNames        (via detector_name)
-#      GET /api/SettingsController/getCameraStatus         (via camera_status)
-#      GET /api/RecordingController/snapNumpyToFastAPI     (via snap)
-@pytest.mark.hardware
-@pytest.mark.usefixtures("camera_status")
-def test_camera_returns_image(detector_name):
-    response = snap(detector_name)
-
     assert response.headers["Content-Type"].startswith("image/png")
-    assert response.content.startswith(PNG_SIGNATURE)
 
     width, height = png_dimensions(response.content)
 
-    assert width > 0
-    assert height > 0
-    assert len(response.content) > 100
+    return Frame(response.content, width, height, RESIZE_FACTOR)
 
 
+def snap_observation():
+    """
+    Request one frame from the observation camera.
 
-#  Resolution test against whatever sensor is attached.
-#
-#  The expected size comes from getCameraStatus, so this follows the rig rather
-#  than assuming one camera model. currentWidth and currentHeight come first
-#  because they already account for a ROI or binning, with sensorWidth and
-#  sensorHeight as the fallback.
-#
-#  The setup file is the wrong source here: its
-#  managerProperties.hikcam.image_width/image_height describe what ImSwitch
-#  asks the driver for, not what the driver delivers. On this rig it declares
-#  1000x1000 while the camera returns 3072x2048.
-#
-# API: GET /api/SettingsController/getDetectorNames        (via detector_name)
-#      GET /api/SettingsController/getCameraStatus         (via camera_status)
-#      GET /api/RecordingController/snapNumpyToFastAPI     (via snap)
+    snapNumpyToFastAPI only collects detectors with forAcquisition=true. The
+    observation camera has it false, so that endpoint answers 500 (KeyError)
+    for it. snapOverviewImage reads the camera's latest frame directly and
+    returns it as a full-resolution JPEG, without touching the setup file.
+
+    It picks the camera itself (experiment.overviewCameraName, else the
+    detector named ObservationCamera). camera_name only names the folder the
+    snapshot PNG is saved in on the Pi, kept separate from real overview
+    registrations.
+
+    API:
+        POST /api/ExperimentController/snapOverviewImage
+    """
+
+    response = requests.post(
+        f"{BASE_URL}/api/ExperimentController/snapOverviewImage",
+        params={"slot_id": "1", "camera_name": "e2e_camera_test"},
+        timeout=10,
+    )
+
+    assert response.status_code == 200, response.text
+
+    body = response.json()
+
+    assert body.get("imageMimeType") == "image/jpeg", body.get("imageMimeType")
+
+    raw = base64.b64decode(body["imageBase64"])
+    width, height = jpeg_dimensions(raw)
+
+    return Frame(raw, width, height, 1.0)
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.hardware
+@pytest.mark.usefixtures("camera_status")
+def test_camera_returns_image(detector_name):
+    """
+    Every real configured detector must return a valid image frame.
+    """
+
+    frame = snap(detector_name)
+
+    assert frame.width > 0
+    assert frame.height > 0
+    assert len(frame.raw) > 100
+
+
 @pytest.mark.hardware
 def test_camera_matches_sensor_resolution(detector_name, camera_status):
-    full_width = camera_status.get("currentWidth") or camera_status.get("sensorWidth")
-    full_height = camera_status.get("currentHeight") or camera_status.get("sensorHeight")
+    """
+    Compare the returned image size against the resolution reported
+    by the individual detector.
+    """
+
+    full_width = (
+        camera_status.get("currentWidth")
+        or camera_status.get("sensorWidth")
+    )
+
+    full_height = (
+        camera_status.get("currentHeight")
+        or camera_status.get("sensorHeight")
+    )
 
     if not full_width or not full_height:
         pytest.skip(
@@ -162,20 +296,18 @@ def test_camera_matches_sensor_resolution(detector_name, camera_status):
             f"({full_width}x{full_height})"
         )
 
-    response = snap(detector_name)
+    frame = snap(detector_name)
 
-    assert response.headers["Content-Type"].startswith("image/png")
+    expected_width = int(full_width * frame.resize_factor)
+    expected_height = int(full_height * frame.resize_factor)
 
-    width, height = png_dimensions(response.content)
-
-    expected_width = int(full_width * RESIZE_FACTOR)
-    expected_height = int(full_height * RESIZE_FACTOR)
-
-    assert (width, height) == (
+    assert (frame.width, frame.height) == (
         expected_width,
         expected_height,
     ), (
-        f"unexpected camera resolution: got {width}x{height}, expected "
+        f"{detector_name}: unexpected camera resolution: "
+        f"got {frame.width}x{frame.height}, expected "
         f"{expected_width}x{expected_height} "
-        f"({full_width}x{full_height} at resizeFactor {RESIZE_FACTOR})"
+        f"({full_width}x{full_height} at "
+        f"resizeFactor {frame.resize_factor})"
     )

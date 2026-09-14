@@ -31,6 +31,27 @@ A frame in sensor resolution can only have come off the physical sensor, which
 is more than the laser HTTP test can show: `getLaserActive` there hands back
 `self.enabled`, set a line earlier.
 
+## The observation camera
+
+Detectors with `observ` in their name take a different path. The observation
+camera has `forAcquisition: false`, and `snapNumpyToFastAPI` only collects
+acquisition detectors, so for it that endpoint answers 500 (`KeyError`). The
+test snaps it through the overview endpoint instead, without changing the setup
+file:
+
+```
+POST {base}/api/ExperimentController/snapOverviewImage?slot_id=1&camera_name=e2e_camera_test
+-> 200, JSON with imageBase64 (JPEG, full resolution)
+```
+
+The dimensions come from the JPEG start-of-frame header, again without Pillow.
+There is no `resizeFactor`, so the resolution test expects the full frame size.
+
+`snapOverviewImage` chooses the camera itself (`experiment.overviewCameraName`,
+else the detector named `ObservationCamera`); `camera_name` only names the
+folder it saves a snapshot PNG in, under
+`<data>/OverviewRegistration/e2e_camera_test__current/` on the Pi.
+
 ## The mock gate
 
 A detector name does not prove hardware. When the real driver fails to start,
