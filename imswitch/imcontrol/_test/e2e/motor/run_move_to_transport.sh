@@ -8,7 +8,8 @@
 # THIS MOVES THE STAGE. See move_to_transport.py for where the target comes
 # from and why Z hard limits are off during the move.
 #
-# Override with PI_HOST / IMSWITCH_CONTAINER / IMSWITCH_URL / TRANSPORT_TIMEOUT.
+# Override with PI_HOST / IMSWITCH_CONTAINER / IMSWITCH_URL / TRANSPORT_TIMEOUT /
+# TRANSPORT_SPEED.
 
 set -euo pipefail
 
@@ -23,6 +24,7 @@ ENVS="-e IMSWITCH_URL=$IMSWITCH_URL"
 
 # Forwarded only when set, so an unset one keeps the script's own default.
 [ -n "${TRANSPORT_TIMEOUT:-}" ] && ENVS="$ENVS -e TRANSPORT_TIMEOUT=$TRANSPORT_TIMEOUT"
+[ -n "${TRANSPORT_SPEED:-}" ] && ENVS="$ENVS -e TRANSPORT_SPEED=$TRANSPORT_SPEED"
 
 # A single file needs no tar/docker cp round trip: it is piped through ssh
 # into python's stdin, and docker exec -i keeps that stdin open.

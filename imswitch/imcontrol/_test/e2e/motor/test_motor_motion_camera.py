@@ -46,6 +46,18 @@ DISTANCE_UM = int(
     )
 )
 
+# Direction of the first move for Z: +1 or -1.
+#
+# Z moves negative first and then back, so it does not run towards
+# the Z endstop (homeDirectionZ is +1) right after the transport
+# move switched the Z hard limits off.
+Z_DIRECTION = int(
+    os.environ.get(
+        "MOTION_CAMERA_Z_DIRECTION",
+        "-1",
+    )
+)
+
 # Motor speed passed to movePositioner.
 #
 # Without an explicit speed, PositionerController uses 5000.
@@ -53,7 +65,7 @@ DISTANCE_UM = int(
 SPEED = int(
     os.environ.get(
         "MOTION_CAMERA_SPEED",
-        "20000",
+        "15000",
     )
 )
 
@@ -110,6 +122,15 @@ ROI_Y2 = int(
     os.environ.get(
         "MOTION_CAMERA_ROI_Y2",
         "355",
+    )
+)
+
+# Z/A analysis: remove this percentage from the top of the image,
+# only the lower part is used for the grey value difference.
+TOP_CROP_PERCENT = int(
+    os.environ.get(
+        "MOTION_CAMERA_TOP_CROP_PERCENT",
+        "25",
     )
 )
 
@@ -190,6 +211,26 @@ def crop_motion_roi(frame):
         ROI_Y1:ROI_Y2,
         ROI_X1:ROI_X2,
     ]
+
+
+def crop_top(frame):
+    """Remove the top TOP_CROP_PERCENT of the image."""
+
+    height = frame.shape[0]
+
+    top = (
+        height
+        * TOP_CROP_PERCENT
+        // 100
+    )
+
+    assert 0 <= top < height, (
+        f"invalid top crop "
+        f"{TOP_CROP_PERCENT}% "
+        f"for image height {height}"
+    )
+
+    return frame[top:, :]
 
 
 def phase_shift(before, after):
@@ -371,6 +412,8 @@ def observation_camera():
         None,
     )
 
+    # The fixture is module scoped: a skip here skips every test
+    # in this file, before any hardware is moved.
     if camera is None:
         pytest.skip(
             f"no observation camera found; "
@@ -383,6 +426,13 @@ def observation_camera():
         detectorName=camera,
     )
 
+    if status.get("status") == "error":
+        pytest.skip(
+            f"{camera} status unavailable: "
+            f"{status.get('error')}"
+        )
+
+    # A camera that fails to open usually falls back to a mock camera.
     if (
         status.get("isMock")
         or str(
@@ -392,8 +442,14 @@ def observation_camera():
             )
         ).lower() == "mock"
     ):
-        pytest.fail(
-            f"{camera} is a mock camera"
+        pytest.skip(
+            f"{camera} is a mock camera "
+            f"(not connected or turned off)"
+        )
+
+    if status.get("isConnected") is False:
+        pytest.skip(
+            f"{camera} is not connected"
         )
 
     # Verify that the camera works before moving hardware.
@@ -401,7 +457,7 @@ def observation_camera():
         frame = grab()
 
     except Exception as exc:
-        pytest.fail(
+        pytest.skip(
             f"{camera} cannot deliver "
             f"an image: {exc}"
         )
@@ -483,6 +539,13 @@ def measure_axis_motion(
         axis.upper() in EXPECTED_DIRECTION
     )
 
+    # First move is positive for every axis except Z.
+    distance = (
+        DISTANCE_UM * Z_DIRECTION
+        if axis.upper() == "Z"
+        else DISTANCE_UM
+    )
+
     print(
         f"\nMeasuring {positioner} {axis}"
     )
@@ -496,19 +559,21 @@ def measure_axis_motion(
 
     else:
         print(
-            f"{axis}: using full image "
+            f"{axis}: using lower "
+            f"{100 - TOP_CROP_PERCENT}% of the image "
             f"for image difference"
         )
 
     # For X/Y, analyse exactly the ROI.
     #
-    # For Z/A, use the complete image because those axes
-    # do not necessarily produce a clean translation.
+    # For Z/A, use the image without its top TOP_CROP_PERCENT,
+    # because those axes do not necessarily produce a clean
+    # translation.
     def analysis_region(frame):
         if use_translation_roi:
             return crop_motion_roi(frame)
 
-        return frame
+        return crop_top(frame)
 
     # ---------------------------------------------------------
     # Camera noise baseline
@@ -545,7 +610,7 @@ def measure_axis_motion(
 
         print(
             f"{axis}: moving "
-            f"+{DISTANCE_UM} um"
+            f"{distance:+d} um"
         )
 
         api(
@@ -553,7 +618,7 @@ def measure_axis_motion(
             "movePositioner",
             positionerName=positioner,
             axis=axis,
-            dist=DISTANCE_UM,
+            dist=distance,
             isBlocking=True,
             speed=SPEED,
         )
@@ -576,7 +641,7 @@ def measure_axis_motion(
         if moved_forward:
             print(
                 f"{axis}: moving "
-                f"-{DISTANCE_UM} um"
+                f"{-distance:+d} um"
             )
 
             api(
@@ -584,7 +649,7 @@ def measure_axis_motion(
                 "movePositioner",
                 positionerName=positioner,
                 axis=axis,
-                dist=-DISTANCE_UM,
+                dist=-distance,
                 isBlocking=True,
                 speed=SPEED,
             )

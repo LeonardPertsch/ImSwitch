@@ -27,6 +27,10 @@ BASE_URL = os.environ.get("IMSWITCH_URL", "http://localhost:8001")
 # How long to wait for the stage to stop, in seconds.
 TIMEOUT = float(os.environ.get("TRANSPORT_TIMEOUT", "120"))
 
+# Motor speed for the transport move. The endpoint default is 10000.
+# Don't go higher than 30000
+SPEED = float(os.environ.get("TRANSPORT_SPEED", "20000"))
+
 POLL = 0.5
 
 
@@ -67,7 +71,7 @@ def move_to_transport():
 
     API: GET /api/PositionerController/moveToTransportPosition
     """
-    api("moveToTransportPosition", isBlocking=True)
+    api("moveToTransportPosition", speed=SPEED, isBlocking=True)
 
     return wait_until_stopped()
 
