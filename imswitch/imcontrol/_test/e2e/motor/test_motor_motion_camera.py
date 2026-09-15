@@ -15,6 +15,7 @@ Flow:
 Tests:
 - test_axis_motion_is_visible (A, X, Y, Z): grey value change above noise
 - test_axis_motion_direction (X, Y): phase correlation shows right / down
+- test_z_motion_changes_scale (Z): apparent image scale changes above noise
 
 Every axis is moved only once; both tests share that measurement.
 
@@ -133,6 +134,14 @@ TOP_CROP_PERCENT = int(
         "25",
     )
 )
+
+# Z scale test: searched scale range / step, and pass limits
+# (minimum |scale - 1| and multiple of the stationary scale noise).
+Z_SCALE_MIN = float(os.environ.get("MOTION_CAMERA_Z_SCALE_MIN", "0.90"))
+Z_SCALE_MAX = float(os.environ.get("MOTION_CAMERA_Z_SCALE_MAX", "1.10"))
+Z_SCALE_STEP = float(os.environ.get("MOTION_CAMERA_Z_SCALE_STEP", "0.002"))
+Z_MIN_SCALE_CHANGE = float(os.environ.get("MOTION_CAMERA_Z_MIN_SCALE_CHANGE", "0.002"))
+Z_SCALE_NOISE_RATIO = float(os.environ.get("MOTION_CAMERA_Z_SCALE_NOISE_RATIO", "2.0"))
 
 
 def api(controller, method, **params):
@@ -345,6 +354,47 @@ def phase_shift(before, after):
         float(dx),
         peak,
     )
+
+
+def estimate_scale(before, after):
+    """Estimate the apparent scale of AFTER relative to BEFORE.
+
+    scale > 1: AFTER appears larger, scale < 1: AFTER appears smaller.
+
+    Brute force: zoom BEFORE around its centre by every candidate scale,
+    centre crop / pad it back to its shape (padding with the median),
+    align the residual shift with phase_shift() and keep the candidate
+    with the highest correlation peak.
+
+    Returns (scale, dx, dy, peak).
+    """
+
+    height, width = before.shape
+    image = Image.fromarray(np.ascontiguousarray(before, dtype=np.float32))
+    fill = float(np.median(before))
+    best = (1.0, 0.0, 0.0, -1.0)
+
+    for scale in np.arange(Z_SCALE_MIN, Z_SCALE_MAX + Z_SCALE_STEP / 2, Z_SCALE_STEP):
+        zoomed = np.asarray(image.resize(
+            (max(1, round(width * scale)), max(1, round(height * scale))),
+            Image.BILINEAR,
+        ))
+        zh, zw = zoomed.shape
+
+        # Source offset (crop, scale > 1) and target offset (pad, scale < 1).
+        sy, ty = max(0, (zh - height) // 2), max(0, (height - zh) // 2)
+        sx, tx = max(0, (zw - width) // 2), max(0, (width - zw) // 2)
+        h, w = min(zh, height), min(zw, width)
+
+        candidate = np.full(before.shape, fill, dtype=np.float32)
+        candidate[ty:ty + h, tx:tx + w] = zoomed[sy:sy + h, sx:sx + w]
+
+        dy, dx, peak = phase_shift(candidate, after)
+
+        if peak > best[3]:
+            best = (round(float(scale), 6), dx, dy, peak)
+
+    return best
 
 
 def describe_direction(
@@ -579,16 +629,19 @@ def measure_axis_motion(
     # Camera noise baseline
     # ---------------------------------------------------------
 
+    # Full frames are kept for the Z scale analysis.
+    baseline_1_full = grab()
     baseline_1 = analysis_region(
-        grab()
+        baseline_1_full
     )
 
     time.sleep(
         settle
     )
 
+    before_full = grab()
     before = analysis_region(
-        grab()
+        before_full
     )
 
     baseline = image_difference(
@@ -629,8 +682,9 @@ def measure_axis_motion(
             settle
         )
 
+        after_full = grab()
         after = analysis_region(
-            grab()
+            after_full
         )
 
     finally:
@@ -723,6 +777,35 @@ def measure_axis_motion(
             dy=dy,
             peak=peak,
             direction=direction,
+        )
+
+    # ---------------------------------------------------------
+    # Z apparent scale (same frames, motion ROI)
+    # ---------------------------------------------------------
+
+    if axis.upper() == "Z":
+        baseline_scale = estimate_scale(
+            crop_motion_roi(baseline_1_full), crop_motion_roi(before_full)
+        )[0]
+        scale, dx, dy, peak = estimate_scale(
+            crop_motion_roi(before_full), crop_motion_roi(after_full)
+        )
+        size = "larger" if scale > 1 else "smaller" if scale < 1 else "unchanged"
+
+        print(f"{axis}: baseline apparent scale = {baseline_scale:.4f} ({baseline_scale - 1:+.2%})")
+        print(
+            f"{axis}: apparent scale = {scale:.4f} ({scale - 1:+.2%}), image={size}, "
+            f"residual dx={dx:+.1f}px, dy={dy:+.1f}px, peak={peak:.4f}"
+        )
+
+        result.update(
+            z_scale=scale,
+            z_scale_change=abs(scale - 1),
+            z_baseline_scale=baseline_scale,
+            z_baseline_scale_change=abs(baseline_scale - 1),
+            z_scale_dx=dx,
+            z_scale_dy=dy,
+            z_scale_peak=peak,
         )
 
     return result
@@ -818,4 +901,43 @@ def test_axis_motion_direction(
         f"dx={result['dx']:+.1f}px, "
         f"dy={result['dy']:+.1f}px, "
         f"peak={result['peak']:.4f}"
+    )
+
+
+@pytest.mark.hardware
+@pytest.mark.parametrize(
+    "positioner,axis",
+    [(p, a) for p, a in axes() if a.upper() == "Z"] or [(None, None)],
+)
+def test_z_motion_changes_scale(
+    positioner,
+    axis,
+    axis_motion,
+):
+    """Z: apparent image scale must change clearly above stationary noise.
+
+    Whether Z makes the image larger or smaller is not asserted yet.
+    """
+
+    if positioner is None:
+        pytest.skip(
+            "no Z positioner reported"
+        )
+
+    result = axis_motion(
+        positioner,
+        axis,
+    )
+
+    change = result["z_scale_change"]
+    noise = result["z_baseline_scale_change"]
+
+    assert change >= Z_MIN_SCALE_CHANGE and change >= noise * Z_SCALE_NOISE_RATIO, (
+        f"{positioner} {axis}: "
+        f"apparent scale change not clear enough. "
+        f"scale={result['z_scale']:.4f}, "
+        f"change={change:.4f}, "
+        f"baseline change={noise:.4f}, "
+        f"required>={Z_MIN_SCALE_CHANGE:.4f} "
+        f"and >={Z_SCALE_NOISE_RATIO:.1f}x baseline"
     )

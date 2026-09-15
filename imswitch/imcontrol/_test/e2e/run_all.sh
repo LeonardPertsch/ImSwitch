@@ -39,10 +39,27 @@ for arg in "$@"; do TARGETS="$TARGETS /tmp/e2e/$arg"; done
 
 # ustar carries no pax extended headers, so GNU tar on the Pi does not
 # warn about the SCHILY.fflags that macOS bsdtar would otherwise write.
-tar --no-xattrs --format=ustar -czf - -C "$DIR" . | ssh "$PI" "
+#
+# Upload and test run are two ssh calls sharing one master connection, so it
+# is still one password prompt. The test run needs its own call: the upload's
+# stdin is the tar stream, so it cannot have a terminal.
+SSH_OPTS=(-o ControlMaster=auto -o ControlPath="/tmp/e2e-ssh-$$" -o ControlPersist=60)
+trap 'ssh -o ControlPath="/tmp/e2e-ssh-$$" -O exit "$PI" 2>/dev/null || true' EXIT
+
+tar --no-xattrs --format=ustar -czf - -C "$DIR" . | ssh "${SSH_OPTS[@]}" "$PI" "
     cat > /tmp/e2e.tgz &&
     docker cp /tmp/e2e.tgz $CONTAINER:/tmp/e2e.tgz >/dev/null &&
-    docker exec $CONTAINER sh -c 'rm -rf /tmp/e2e && mkdir -p /tmp/e2e && tar xzf /tmp/e2e.tgz -C /tmp/e2e' &&
-    docker exec $ENVS $CONTAINER python3 -m pytest $TARGETS \
+    docker exec $CONTAINER sh -c 'rm -rf /tmp/e2e && mkdir -p /tmp/e2e && tar xzf /tmp/e2e.tgz -C /tmp/e2e'
+"
+
+# -t (ssh) and -it (docker exec) give pytest a terminal, so Ctrl+C reaches
+# pytest inside the container. Without them Ctrl+C only killed the local ssh
+# client and the tests kept running on the Pi. Only when we are on a terminal:
+# docker exec -it refuses to start without one.
+SSH_TTY_FLAG="" DOCKER_TTY_FLAG=""
+if [ -t 0 ]; then SSH_TTY_FLAG="-t" DOCKER_TTY_FLAG="-it"; fi
+
+ssh $SSH_TTY_FLAG "${SSH_OPTS[@]}" "$PI" "
+    docker exec $DOCKER_TTY_FLAG $ENVS $CONTAINER python3 -m pytest $TARGETS \
         -v -ra --tb=line $COLOR -p no:arkitekt_next -p no:cacheprovider -o markers=hardware
 "
