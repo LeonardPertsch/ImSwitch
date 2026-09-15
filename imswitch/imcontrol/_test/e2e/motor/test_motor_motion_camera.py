@@ -1,19 +1,22 @@
-"""Verify physical stage motion using the observation camera.
-
-The test does not trust the motor position reported by the firmware.
-Instead, it checks whether the observation camera sees a real physical change.
+"""Verify physical stage motion with the observation camera.
 
 Flow:
+1. Check observation camera.
+2. Move to transport position once.
+3. For every axis:
+   - measure camera noise
+   - take image before movement
+   - move forward
+   - take image after movement
+   - detect image change
+   - for X/Y: detect rough translation and direction using phase correlation
+   - move back
 
-    1. Verify that the observation camera exists.
-    2. Move the stage to the transport position once.
-    3. For every reported axis:
-        a. Take two images without moving to measure normal camera noise.
-        b. Move the axis forward.
-        c. Wait for everything to settle.
-        d. Take another image.
-        e. Move the axis back.
-        f. Compare the image change caused by the move with the normal noise.
+Tests:
+- test_axis_motion_is_visible (A, X, Y, Z): grey value change above noise
+- test_axis_motion_direction (X, Y): phase correlation shows right / down
+
+Every axis is moved only once; both tests share that measurement.
 
 THIS TEST MOVES REAL HARDWARE.
 """
@@ -36,7 +39,6 @@ BASE_URL = os.environ.get(
     "http://localhost:8001",
 )
 
-# Distance moved for every axis.
 DISTANCE_UM = int(
     os.environ.get(
         "MOTION_CAMERA_DISTANCE_UM",
@@ -44,7 +46,17 @@ DISTANCE_UM = int(
     )
 )
 
-# Wait after movement or between baseline images.
+# Motor speed passed to movePositioner.
+#
+# Without an explicit speed, PositionerController uses 5000.
+# 10000 is twice as fast.
+SPEED = int(
+    os.environ.get(
+        "MOTION_CAMERA_SPEED",
+        "20000",
+    )
+)
+
 SETTLE_MS = int(
     os.environ.get(
         "MOTION_CAMERA_SETTLE_MS",
@@ -52,8 +64,6 @@ SETTLE_MS = int(
     )
 )
 
-# The image change caused by the motor movement must be this many times larger
-# than the normal camera-to-camera variation.
 MIN_RATIO = float(
     os.environ.get(
         "MOTION_CAMERA_MIN_RATIO",
@@ -62,31 +72,61 @@ MIN_RATIO = float(
 )
 
 
-def api(controller, method, **params):
-    """Call an ImSwitch GET endpoint and return its JSON response."""
+# Region of interest used for X/Y motion detection.
+#
+# Default values are chosen for the current 640 x 360 observation image.
+#
+# NumPy indexing:
+#
+#     frame[y1:y2, x1:x2]
+#
+# ROI:
+#
+#     x = 150 .. 340
+#     y = 150 .. 355
+#
+ROI_X1 = int(
+    os.environ.get(
+        "MOTION_CAMERA_ROI_X1",
+        "150",
+    )
+)
 
+ROI_X2 = int(
+    os.environ.get(
+        "MOTION_CAMERA_ROI_X2",
+        "340",
+    )
+)
+
+ROI_Y1 = int(
+    os.environ.get(
+        "MOTION_CAMERA_ROI_Y1",
+        "150",
+    )
+)
+
+ROI_Y2 = int(
+    os.environ.get(
+        "MOTION_CAMERA_ROI_Y2",
+        "355",
+    )
+)
+
+
+def api(controller, method, **params):
     response = requests.get(
         f"{BASE_URL}/api/{controller}/{method}",
         params=params,
         timeout=60,
     )
 
-    assert response.status_code == 200, (
-        f"{controller}/{method}: "
-        f"HTTP {response.status_code}: {response.text}"
-    )
+    assert response.status_code == 200, response.text
 
     return response.json()
 
 
 def grab():
-    """Take one frame from the observation camera.
-
-    The observation camera is not an acquisition camera, therefore this uses
-    ExperimentController/snapOverviewImage instead of
-    RecordingController/snapNumpyToFastAPI.
-    """
-
     response = requests.post(
         f"{BASE_URL}/api/ExperimentController/snapOverviewImage",
         params={
@@ -96,10 +136,7 @@ def grab():
         timeout=60,
     )
 
-    assert response.status_code == 200, (
-        f"snapOverviewImage: "
-        f"HTTP {response.status_code}: {response.text}"
-    )
+    assert response.status_code == 200, response.text
 
     image_bytes = base64.b64decode(
         response.json()["imageBase64"]
@@ -112,18 +149,18 @@ def grab():
         dtype=np.float32,
     )
 
-    print("SNAPSHOT", flush=True)
+    print(
+        f"SNAPSHOT shape={frame.shape}",
+        flush=True,
+    )
 
     return frame
 
 
 def image_difference(before, after):
-    """Return mean absolute greyscale difference between two frames."""
+    """Return the mean absolute pixel difference."""
 
-    assert before.shape == after.shape, (
-        f"camera image shape changed: "
-        f"{before.shape} -> {after.shape}"
-    )
+    assert before.shape == after.shape
 
     return float(
         np.mean(
@@ -132,28 +169,194 @@ def image_difference(before, after):
     )
 
 
-def axes():
-    """Return every positioner/axis pair reported by ImSwitch."""
+def crop_motion_roi(frame):
+    """Return the ROI containing the moving stage/object."""
 
+    height, width = frame.shape
+
+    assert 0 <= ROI_X1 < ROI_X2 <= width, (
+        f"invalid ROI x-range "
+        f"{ROI_X1}:{ROI_X2} "
+        f"for image width {width}"
+    )
+
+    assert 0 <= ROI_Y1 < ROI_Y2 <= height, (
+        f"invalid ROI y-range "
+        f"{ROI_Y1}:{ROI_Y2} "
+        f"for image height {height}"
+    )
+
+    return frame[
+        ROI_Y1:ROI_Y2,
+        ROI_X1:ROI_X2,
+    ]
+
+
+def phase_shift(before, after):
+    """Estimate translation of AFTER relative to BEFORE as (dy, dx).
+
+    Positive dx means the image moved right.
+    Negative dx means left.
+
+    Positive dy means down.
+    Negative dy means up.
+    """
+
+    assert before.shape == after.shape
+
+    before = before.astype(
+        np.float64,
+        copy=True,
+    )
+
+    after = after.astype(
+        np.float64,
+        copy=True,
+    )
+
+    # Remove the DC component.
+    #
+    # We care about structures and their displacement,
+    # not the average brightness of the image.
+    before -= before.mean()
+    after -= after.mean()
+
+    # Apply a Hann window.
+    #
+    # FFT assumes that the image repeats periodically.
+    # Without a window, the transition from one image edge
+    # to the opposite edge can create strong artificial
+    # frequencies.
+    window = (
+        np.hanning(before.shape[0])[:, None]
+        * np.hanning(before.shape[1])[None, :]
+    )
+
+    before *= window
+    after *= window
+
+    # Fourier transforms.
+    f_before = np.fft.fft2(before)
+    f_after = np.fft.fft2(after)
+
+    # Cross Power Spectrum.
+    #
+    # conj(F_before) * F_after gives the displacement
+    # of AFTER relative to BEFORE with the sign convention
+    # documented above.
+    cross_power = (
+        np.conj(f_before)
+        * f_after
+    )
+
+    magnitude = np.abs(
+        cross_power
+    )
+
+    # Remove amplitude information.
+    #
+    # Only phase information remains.
+    cross_power /= np.maximum(
+        magnitude,
+        1e-12,
+    )
+
+    # Transform the phase correlation back into image space.
+    correlation = np.fft.ifft2(
+        cross_power
+    )
+
+    correlation = np.abs(
+        correlation
+    )
+
+    # Move zero displacement to the centre.
+    correlation = np.fft.fftshift(
+        correlation
+    )
+
+    # Locate the strongest correlation peak.
+    peak_y, peak_x = np.unravel_index(
+        np.argmax(correlation),
+        correlation.shape,
+    )
+
+    center_y = (
+        correlation.shape[0] // 2
+    )
+
+    center_x = (
+        correlation.shape[1] // 2
+    )
+
+    dy = peak_y - center_y
+    dx = peak_x - center_x
+
+    peak = float(
+        correlation[
+            peak_y,
+            peak_x,
+        ]
+    )
+
+    return (
+        float(dy),
+        float(dx),
+        peak,
+    )
+
+
+def describe_direction(
+    dy,
+    dx,
+    min_shift=2,
+):
+    """Convert the measured translation into a rough direction."""
+
+    distance = float(
+        np.hypot(
+            dx,
+            dy,
+        )
+    )
+
+    if distance < min_shift:
+        return "no clear translation"
+
+    if abs(dx) > abs(dy):
+        return (
+            "right"
+            if dx > 0
+            else "left"
+        )
+
+    return (
+        "down"
+        if dy > 0
+        else "up"
+    )
+
+
+def axes():
     try:
         positions = api(
             "PositionerController",
             "getPositionerPositions",
         )
+
     except Exception:
         return []
 
     return [
         (positioner, axis)
-        for positioner, axis_map in (positions or {}).items()
+        for positioner, axis_map
+        in (positions or {}).items()
         for axis in axis_map
     ]
 
 
 @pytest.fixture(scope="module")
 def observation_camera():
-    """Verify the camera and move to transport once before all tests."""
-
     names = api(
         "SettingsController",
         "getDetectorNames",
@@ -171,7 +374,7 @@ def observation_camera():
     if camera is None:
         pytest.skip(
             f"no observation camera found; "
-            f"available detectors: {names}"
+            f"detectors: {names}"
         )
 
     status = api(
@@ -183,33 +386,59 @@ def observation_camera():
     if (
         status.get("isMock")
         or str(
-            status.get("model", "")
+            status.get(
+                "model",
+                "",
+            )
         ).lower() == "mock"
     ):
         pytest.fail(
             f"{camera} is a mock camera"
         )
 
+    # Verify that the camera works before moving hardware.
+    try:
+        frame = grab()
+
+    except Exception as exc:
+        pytest.fail(
+            f"{camera} cannot deliver "
+            f"an image: {exc}"
+        )
+
+    # Validate the ROI before moving hardware.
+    try:
+        roi = crop_motion_roi(frame)
+
+    except AssertionError as exc:
+        pytest.fail(
+            f"invalid motion ROI: {exc}"
+        )
+
     print(
         f"\nObservation camera: {camera}"
     )
 
-    # Make sure the camera works before moving any hardware.
-    try:
-        grab()
-    except Exception as exc:
-        pytest.fail(
-            f"{camera} cannot deliver an image: {exc}"
-        )
+    print(
+        f"Image shape: {frame.shape}"
+    )
 
     print(
-        "\nMoving stage to transport position..."
+        "Motion ROI: "
+        f"x={ROI_X1}:{ROI_X2}, "
+        f"y={ROI_Y1}:{ROI_Y2}, "
+        f"shape={roi.shape}"
+    )
+
+    print(
+        "Moving stage to transport position..."
     )
 
     position = move_to_transport()
 
     print(
-        f"Transport position reached: {position}"
+        f"Transport position reached: "
+        f"{position}"
     )
 
     time.sleep(
@@ -219,42 +448,87 @@ def observation_camera():
     return camera
 
 
-@pytest.mark.hardware
-@pytest.mark.parametrize(
-    "positioner,axis",
-    axes() or [(None, None)],
-)
-def test_axis_motion_is_visible(
+# Expected image direction when an axis moves by +DISTANCE_UM.
+EXPECTED_DIRECTION = {
+    "X": "right",
+    "Y": "down",
+}
+
+
+def translation_axes():
+    """Return only the axes checked with phase correlation."""
+
+    return [
+        (positioner, axis)
+        for positioner, axis in axes()
+        if axis.upper() in EXPECTED_DIRECTION
+    ]
+
+
+def measure_axis_motion(
     positioner,
     axis,
-    observation_camera,
 ):
-    """Move one axis and verify that the camera sees more than normal noise."""
+    """Move one axis forward and back and analyse the camera images.
 
-    if positioner is None:
-        pytest.skip(
-            "no positioners reported"
-        )
+    Returns a dict with the image difference results and, for X/Y,
+    the phase correlation results.
+    """
 
-    settle = SETTLE_MS / 1000
-
-    print(
-        f"\nTesting {positioner} {axis}"
+    settle = (
+        SETTLE_MS / 1000
     )
 
-    # ------------------------------------------------------------
-    # 1. Measure normal camera variation WITHOUT moving anything.
-    # ------------------------------------------------------------
+    use_translation_roi = (
+        axis.upper() in EXPECTED_DIRECTION
+    )
 
-    baseline_1 = grab()
+    print(
+        f"\nMeasuring {positioner} {axis}"
+    )
 
-    time.sleep(settle)
+    if use_translation_roi:
+        print(
+            f"{axis}: using motion ROI "
+            f"x={ROI_X1}:{ROI_X2}, "
+            f"y={ROI_Y1}:{ROI_Y2}"
+        )
 
-    baseline_2 = grab()
+    else:
+        print(
+            f"{axis}: using full image "
+            f"for image difference"
+        )
+
+    # For X/Y, analyse exactly the ROI.
+    #
+    # For Z/A, use the complete image because those axes
+    # do not necessarily produce a clean translation.
+    def analysis_region(frame):
+        if use_translation_roi:
+            return crop_motion_roi(frame)
+
+        return frame
+
+    # ---------------------------------------------------------
+    # Camera noise baseline
+    # ---------------------------------------------------------
+
+    baseline_1 = analysis_region(
+        grab()
+    )
+
+    time.sleep(
+        settle
+    )
+
+    before = analysis_region(
+        grab()
+    )
 
     baseline = image_difference(
         baseline_1,
-        baseline_2,
+        before,
     )
 
     print(
@@ -265,12 +539,13 @@ def test_axis_motion_is_visible(
     moved_forward = False
 
     try:
-        # --------------------------------------------------------
-        # 2. Move the axis forward.
-        # --------------------------------------------------------
+        # -----------------------------------------------------
+        # Move stage
+        # -----------------------------------------------------
 
         print(
-            f"{axis}: moving +{DISTANCE_UM} um"
+            f"{axis}: moving "
+            f"+{DISTANCE_UM} um"
         )
 
         api(
@@ -280,55 +555,28 @@ def test_axis_motion_is_visible(
             axis=axis,
             dist=DISTANCE_UM,
             isBlocking=True,
+            speed=SPEED,
         )
 
         moved_forward = True
 
-        time.sleep(settle)
-
-        # --------------------------------------------------------
-        # 3. Take image AFTER physical movement.
-        # --------------------------------------------------------
-
-        moved_image = grab()
-
-        # --------------------------------------------------------
-        # 4. Compare with the image directly before movement.
-        # --------------------------------------------------------
-
-        movement_difference = image_difference(
-            baseline_2,
-            moved_image,
+        time.sleep(
+            settle
         )
 
-        ratio = (
-            movement_difference
-            / max(baseline, 1e-6)
-        )
-
-        print(
-            f"{axis}: movement difference = "
-            f"{movement_difference:.3f}"
-        )
-
-        print(
-            f"{axis}: baseline difference = "
-            f"{baseline:.3f}"
-        )
-
-        print(
-            f"{axis}: movement / baseline = "
-            f"{ratio:.2f}x"
+        after = analysis_region(
+            grab()
         )
 
     finally:
-        # --------------------------------------------------------
-        # 5. Always return the axis to its original position.
-        # --------------------------------------------------------
+        # -----------------------------------------------------
+        # Always try to return to the starting position
+        # -----------------------------------------------------
 
         if moved_forward:
             print(
-                f"{axis}: moving -{DISTANCE_UM} um"
+                f"{axis}: moving "
+                f"-{DISTANCE_UM} um"
             )
 
             api(
@@ -338,18 +586,171 @@ def test_axis_motion_is_visible(
                 axis=axis,
                 dist=-DISTANCE_UM,
                 isBlocking=True,
+                speed=SPEED,
             )
 
-            time.sleep(settle)
+            time.sleep(
+                settle
+            )
 
-    # ------------------------------------------------------------
-    # 6. Decide whether real motion was visible.
-    # ------------------------------------------------------------
+    # ---------------------------------------------------------
+    # Grey value difference
+    # ---------------------------------------------------------
 
-    assert ratio >= MIN_RATIO, (
-        f"{positioner} {axis}: physical movement was not clearly visible. "
-        f"Movement difference={movement_difference:.3f}, "
-        f"baseline={baseline:.3f}, "
-        f"ratio={ratio:.2f}x, "
+    movement_difference = image_difference(
+        before,
+        after,
+    )
+
+    ratio = (
+        movement_difference
+        / max(
+            baseline,
+            1e-6,
+        )
+    )
+
+    print(
+        f"{axis}: movement difference = "
+        f"{movement_difference:.3f}, "
+        f"ratio={ratio:.2f}x"
+    )
+
+    result = {
+        "baseline": baseline,
+        "movement_difference": movement_difference,
+        "ratio": ratio,
+    }
+
+    # ---------------------------------------------------------
+    # X/Y phase correlation
+    # ---------------------------------------------------------
+
+    if use_translation_roi:
+        dy, dx, peak = phase_shift(
+            before,
+            after,
+        )
+
+        magnitude = float(
+            np.hypot(
+                dx,
+                dy,
+            )
+        )
+
+        direction = describe_direction(
+            dy,
+            dx,
+        )
+
+        print(
+            f"{axis}: image shift = "
+            f"dx={dx:+.1f}px, "
+            f"dy={dy:+.1f}px, "
+            f"magnitude={magnitude:.1f}px, "
+            f"direction={direction}, "
+            f"peak={peak:.4f}"
+        )
+
+        result.update(
+            dx=dx,
+            dy=dy,
+            peak=peak,
+            direction=direction,
+        )
+
+    return result
+
+
+@pytest.fixture(scope="module")
+def axis_motion(observation_camera):
+    """Measure every axis only once per test run.
+
+    Both the grey value test and the direction test read from
+    the same measurement, so the hardware is not moved twice.
+    """
+
+    cache = {}
+
+    def get(positioner, axis):
+        key = (positioner, axis)
+
+        if key not in cache:
+            cache[key] = measure_axis_motion(
+                positioner,
+                axis,
+            )
+
+        return cache[key]
+
+    return get
+
+
+@pytest.mark.hardware
+@pytest.mark.parametrize(
+    "positioner,axis",
+    axes() or [(None, None)],
+)
+def test_axis_motion_is_visible(
+    positioner,
+    axis,
+    axis_motion,
+):
+    """A, X, Y, Z: grey value change must be above camera noise."""
+
+    if positioner is None:
+        pytest.skip(
+            "no positioners reported"
+        )
+
+    result = axis_motion(
+        positioner,
+        axis,
+    )
+
+    assert result["ratio"] >= MIN_RATIO, (
+        f"{positioner} {axis}: "
+        f"physical movement was not clearly visible. "
+        f"movement={result['movement_difference']:.3f}, "
+        f"baseline={result['baseline']:.3f}, "
+        f"ratio={result['ratio']:.2f}x, "
         f"required={MIN_RATIO:.2f}x"
+    )
+
+
+@pytest.mark.hardware
+@pytest.mark.parametrize(
+    "positioner,axis",
+    translation_axes() or [(None, None)],
+)
+def test_axis_motion_direction(
+    positioner,
+    axis,
+    axis_motion,
+):
+    """X, Y: phase correlation must show the expected direction."""
+
+    if positioner is None:
+        pytest.skip(
+            "no X/Y positioners reported"
+        )
+
+    result = axis_motion(
+        positioner,
+        axis,
+    )
+
+    expected_direction = EXPECTED_DIRECTION[
+        axis.upper()
+    ]
+
+    assert result["direction"] == expected_direction, (
+        f"{positioner} {axis}: "
+        f"image moved in the wrong direction. "
+        f"expected={expected_direction}, "
+        f"measured={result['direction']}, "
+        f"dx={result['dx']:+.1f}px, "
+        f"dy={result['dy']:+.1f}px, "
+        f"peak={result['peak']:.4f}"
     )
