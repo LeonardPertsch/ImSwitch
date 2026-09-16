@@ -1,25 +1,13 @@
 """Verify physical stage motion with the observation camera.
 
-Flow:
-1. Check observation camera.
-2. Move to transport position once.
-3. For every axis:
-   - measure camera noise
-   - take image before movement
-   - move forward
-   - take image after movement
-   - detect image change
-   - for X/Y: detect rough translation and direction using phase correlation
-   - move back
+MOVES REAL HARDWARE: parks the stage at the transport position, then moves
+every axis out and back while comparing camera frames.
 
-Tests:
 - test_axis_motion_is_visible (A, X, Y, Z): grey value change above noise
 - test_axis_motion_direction (X, Y): phase correlation shows right / down
 - test_z_motion_changes_scale (Z): apparent image scale changes above noise
 
-Every axis is moved only once; both tests share that measurement.
-
-THIS TEST MOVES REAL HARDWARE.
+Every axis is moved once; all three tests share that measurement.
 """
 
 import base64
@@ -47,11 +35,9 @@ DISTANCE_UM = int(
     )
 )
 
-# Direction of the first move for Z: +1 or -1.
-#
-# Z moves negative first and then back, so it does not run towards
-# the Z endstop (homeDirectionZ is +1) right after the transport
-# move switched the Z hard limits off.
+# Direction of the first Z move: negative first, so Z does not run towards its
+# endstop (homeDirectionZ is +1) right after the transport move switched the Z
+# hard limits off.
 Z_DIRECTION = int(
     os.environ.get(
         "MOTION_CAMERA_Z_DIRECTION",
@@ -65,10 +51,7 @@ Z_DISTANCE_UM = int(
     )
 )
 
-# Motor speed passed to movePositioner.
-#
-# Without an explicit speed, PositionerController uses 5000.
-# 10000 is twice as fast.
+# Motor speed passed to movePositioner; PositionerController defaults to 5000.
 SPEED = int(
     os.environ.get(
         "MOTION_CAMERA_SPEED",
@@ -91,19 +74,8 @@ MIN_RATIO = float(
 )
 
 
-# Region of interest used for X/Y motion detection.
-#
-# Default values are chosen for the current 640 x 360 observation image.
-#
-# NumPy indexing:
-#
-#     frame[y1:y2, x1:x2]
-#
-# ROI:
-#
-#     x = 150 .. 340
-#     y = 150 .. 355
-#
+# Region of interest for X/Y motion detection, indexed frame[y1:y2, x1:x2].
+# Defaults are chosen for the current 640 x 360 observation image.
 ROI_X1 = int(
     os.environ.get(
         "MOTION_CAMERA_ROI_X1",
@@ -132,8 +104,8 @@ ROI_Y2 = int(
     )
 )
 
-# Z/A analysis: remove this percentage from the top of the image,
-# only the lower part is used for the grey value difference.
+# Z/A analysis: only the image below this top crop is used for the grey value
+# difference.
 TOP_CROP_PERCENT = int(
     os.environ.get(
         "MOTION_CAMERA_TOP_CROP_PERCENT",
@@ -151,6 +123,7 @@ Z_SCALE_NOISE_RATIO = float(os.environ.get("MOTION_CAMERA_Z_SCALE_NOISE_RATIO", 
 
 
 def api(controller, method, **params):
+    """Call an ImSwitch endpoint and return its JSON."""
     response = requests.get(
         f"{BASE_URL}/api/{controller}/{method}",
         params=params,
@@ -163,6 +136,7 @@ def api(controller, method, **params):
 
 
 def grab():
+    """Capture one greyscale observation frame as a float array."""
     response = requests.post(
         f"{BASE_URL}/api/ExperimentController/snapOverviewImage",
         params={
@@ -249,13 +223,9 @@ def crop_top(frame):
 
 
 def phase_shift(before, after):
-    """Estimate translation of AFTER relative to BEFORE as (dy, dx).
+    """Estimate translation of AFTER relative to BEFORE as (dy, dx, peak).
 
-    Positive dx means the image moved right.
-    Negative dx means left.
-
-    Positive dy means down.
-    Negative dy means up.
+    Positive dx is right and negative left; positive dy is down, negative up.
     """
 
     assert before.shape == after.shape
@@ -270,19 +240,13 @@ def phase_shift(before, after):
         copy=True,
     )
 
-    # Remove the DC component.
-    #
-    # We care about structures and their displacement,
-    # not the average brightness of the image.
+    # Remove the DC component: structure and its displacement matter, not the
+    # average brightness.
     before -= before.mean()
     after -= after.mean()
 
-    # Apply a Hann window.
-    #
-    # FFT assumes that the image repeats periodically.
-    # Without a window, the transition from one image edge
-    # to the opposite edge can create strong artificial
-    # frequencies.
+    # Hann window: the FFT assumes the image repeats, so without it the jump
+    # from one edge to the opposite creates strong artificial frequencies.
     window = (
         np.hanning(before.shape[0])[:, None]
         * np.hanning(before.shape[1])[None, :]
@@ -295,11 +259,8 @@ def phase_shift(before, after):
     f_before = np.fft.fft2(before)
     f_after = np.fft.fft2(after)
 
-    # Cross Power Spectrum.
-    #
-    # conj(F_before) * F_after gives the displacement
-    # of AFTER relative to BEFORE with the sign convention
-    # documented above.
+    # Cross power spectrum: conj(F_before) * F_after gives the displacement of
+    # AFTER relative to BEFORE, with the sign convention documented above.
     cross_power = (
         np.conj(f_before)
         * f_after
@@ -309,9 +270,7 @@ def phase_shift(before, after):
         cross_power
     )
 
-    # Remove amplitude information.
-    #
-    # Only phase information remains.
+    # Normalise the amplitude away, leaving only phase.
     cross_power /= np.maximum(
         magnitude,
         1e-12,
@@ -363,16 +322,11 @@ def phase_shift(before, after):
 
 
 def estimate_scale(before, after):
-    """Estimate the apparent scale of AFTER relative to BEFORE.
+    """Apparent scale of AFTER relative to BEFORE, as (scale, dx, dy, peak).
 
-    scale > 1: AFTER appears larger, scale < 1: AFTER appears smaller.
-
-    Brute force: zoom BEFORE around its centre by every candidate scale,
-    centre crop / pad it back to its shape (padding with the median),
-    align the residual shift with phase_shift() and keep the candidate
-    with the highest correlation peak.
-
-    Returns (scale, dx, dy, peak).
+    scale > 1 means AFTER appears larger. Brute force: zoom BEFORE by every
+    candidate scale, crop or pad it back to shape, align the residual shift
+    with phase_shift() and keep the candidate with the highest peak.
     """
 
     height, width = before.shape
@@ -435,6 +389,11 @@ def describe_direction(
 
 
 def axes():
+    """Every axis the setup reports, as (positioner, axis) pairs.
+
+    Returns [] rather than raising: parametrize arguments are evaluated at
+    collection, so an exception here would abort collection for the suite.
+    """
     try:
         positions = api(
             "PositionerController",
@@ -454,6 +413,11 @@ def axes():
 
 @pytest.fixture(scope="module")
 def observation_camera():
+    """Check the observation camera, then park the stage for transport.
+
+    Module scoped, so a skip here skips every test in this file before any
+    hardware is moved.
+    """
     names = api(
         "SettingsController",
         "getDetectorNames",
@@ -468,8 +432,6 @@ def observation_camera():
         None,
     )
 
-    # The fixture is module scoped: a skip here skips every test
-    # in this file, before any hardware is moved.
     if camera is None:
         pytest.skip(
             f"no observation camera found; "
@@ -581,10 +543,10 @@ def measure_axis_motion(
     positioner,
     axis,
 ):
-    """Move one axis forward and back and analyse the camera images.
+    """Move one axis forward and back and analyse the camera frames.
 
-    Returns a dict with the image difference results and, for X/Y,
-    the phase correlation results.
+    Returns the image difference results plus, per axis, the X/Y phase
+    correlation or the Z scale estimate.
     """
 
     settle = (
@@ -620,22 +582,15 @@ def measure_axis_motion(
             f"for image difference"
         )
 
-    # For X/Y, analyse exactly the ROI.
-    #
-    # For Z/A, use the image without its top TOP_CROP_PERCENT,
-    # because those axes do not necessarily produce a clean
-    # translation.
+    # X/Y are analysed in the ROI; Z/A use the image below the top crop,
+    # because they do not necessarily produce a clean translation.
     def analysis_region(frame):
         if use_translation_roi:
             return crop_motion_roi(frame)
 
         return crop_top(frame)
 
-    # ---------------------------------------------------------
-    # Camera noise baseline
-    # ---------------------------------------------------------
-
-    # Full frames are kept for the Z scale analysis.
+    # Camera noise baseline. Full frames are kept for the Z scale analysis.
     baseline_1_full = grab()
     baseline_1 = analysis_region(
         baseline_1_full
@@ -663,10 +618,6 @@ def measure_axis_motion(
     moved_forward = False
 
     try:
-        # -----------------------------------------------------
-        # Move stage
-        # -----------------------------------------------------
-
         print(
             f"{axis}: moving "
             f"{distance:+d} um"
@@ -694,10 +645,7 @@ def measure_axis_motion(
         )
 
     finally:
-        # -----------------------------------------------------
-        # Always try to return to the starting position
-        # -----------------------------------------------------
-
+        # Always try to return to the starting position.
         if moved_forward:
             print(
                 f"{axis}: moving "
@@ -718,10 +666,7 @@ def measure_axis_motion(
                 settle
             )
 
-    # ---------------------------------------------------------
-    # Grey value difference
-    # ---------------------------------------------------------
-
+    # Grey value change, measured against the baseline noise.
     movement_difference = image_difference(
         before,
         after,
@@ -747,10 +692,7 @@ def measure_axis_motion(
         "ratio": ratio,
     }
 
-    # ---------------------------------------------------------
-    # X/Y phase correlation
-    # ---------------------------------------------------------
-
+    # X/Y translation and direction.
     if use_translation_roi:
         dy, dx, peak = phase_shift(
             before,
@@ -785,10 +727,7 @@ def measure_axis_motion(
             direction=direction,
         )
 
-    # ---------------------------------------------------------
-    # Z apparent scale (same frames, motion ROI)
-    # ---------------------------------------------------------
-
+    # Z apparent scale, from the same frames but always the motion ROI.
     if axis.upper() == "Z":
         baseline_scale = estimate_scale(
             crop_motion_roi(baseline_1_full), crop_motion_roi(before_full)
@@ -821,8 +760,7 @@ def measure_axis_motion(
 def axis_motion(observation_camera):
     """Measure every axis only once per test run.
 
-    Both the grey value test and the direction test read from
-    the same measurement, so the hardware is not moved twice.
+    All three tests read the same measurement, so hardware is not moved twice.
     """
 
     cache = {}

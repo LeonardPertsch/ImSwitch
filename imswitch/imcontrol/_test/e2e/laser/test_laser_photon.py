@@ -1,4 +1,3 @@
-
 """Check that every configured LED is visible to the camera."""
 
 import os
@@ -9,10 +8,8 @@ import requests
 from PIL import ImageStat
 
 
-# Base URL of the ImSwitch HTTP API, as seen from wherever this test runs.
-# The runners execute pytest inside the container, where ImSwitch is on its
-# own port without the caddy prefix. From outside the Pi it is
-# http://<pi>:8000/imswitch instead, so set IMSWITCH_URL when running locally.
+# ImSwitch runs on :8001 without the caddy prefix inside the container; from
+# outside the Pi it is http://<pi>:8000/imswitch, so set IMSWITCH_URL then.
 BASE_URL = os.environ.get("IMSWITCH_URL", "http://localhost:8001")
 DETECTOR = os.environ.get("IMSWITCH_DETECTOR")
 LASER_VALUE = int(os.environ.get("UC2_LASER_VALUE", "1000"))
@@ -20,19 +17,12 @@ LASER_VALUE = int(os.environ.get("UC2_LASER_VALUE", "1000"))
 SETTLE = 0.1
 
 
-
-# Call an ImSwitch API endpoint and return JSON.
-#
-# Most endpoints are GET; LiveViewController/startLiveView is the one POST, so
-# the verb is a parameter rather than a second copy of this function.
-#
-# A 200 does not always mean the call did what was asked - LiveViewController
-# reports refusals in the body with status 200 - so callers that care have to
-# check the returned status field as well.
-#
-# API: GET|POST {BASE_URL}/api/{controller}/{method}
-#      every call in this file except take_image goes through here
 def api(controller, method, http="GET", **params):
+    """Call an ImSwitch endpoint and return its JSON.
+
+    A 200 does not always mean the call did what was asked: LiveViewController
+    reports refusals in the body, so callers that care check the status field.
+    """
     send = requests.post if http == "POST" else requests.get
 
     response = send(
@@ -44,10 +34,8 @@ def api(controller, method, http="GET", **params):
     return response.json()
 
 
-# Get all configured light sources.
-#
-# API: GET /api/LaserController/getLaserNames
 def get_lights():
+    """Names of all configured light sources, or [] if unreachable."""
     try:
         result = api(
             "AcceptanceTestController",
@@ -63,22 +51,17 @@ def get_lights():
         return []
 LIGHTS = get_lights()
 
-# Only LEDs are asserted on here. A laser on this rig is mounted so that its
-# beam does not reach the sensor, so a photon test on it measures nothing and
-# fails for a reason that has nothing to do with the software path — the path
-# itself is what test_laser_switching.py covers.
-#
-# LIGHTS itself stays complete on purpose: all_lights_off() has to switch the
-# lasers off too, or one left on contaminates the dark frame.
+# Only LEDs are asserted on: the laser on this rig is mounted so its beam never
+# reaches the sensor, so a photon test on it measures nothing. LIGHTS itself
+# stays complete, because all_lights_off() has to switch the lasers off too.
 LEDS = [
     name
     for name in LIGHTS
     if "led" in name.lower() and "laser" not in name.lower()
 ]
 
-# An empty parametrize list would report pytest's generic "got empty parameter
-# set"; this says which precondition was missing instead. The skip mark is
-# applied at collection, so the light_source fixture never runs with None.
+# A named skip instead of pytest's generic "got empty parameter set". Applied
+# at collection, so the light_source fixture never runs with None.
 LED_PARAMS = [pytest.param(name, id=name) for name in LEDS] or [
     pytest.param(
         None,
@@ -92,6 +75,7 @@ LED_PARAMS = [pytest.param(name, id=name) for name in LEDS] or [
 
 @pytest.fixture(scope="module")
 def camera_status(detector_name):
+    """Status of the detector under test; skips on an ImSwitch mock camera."""
     status = api(
         "SettingsController",
         "getCameraStatus",
@@ -111,11 +95,9 @@ def camera_status(detector_name):
 
     return status
 
-# Switch one light source on or off.
-#
-# API: GET /api/LaserController/setLaserValue   (LASER_VALUE when on, else 0)
-#      GET /api/LaserController/setLaserActive
+
 def set_light(name, on):
+    """Switch one light source on at LASER_VALUE, or off."""
     api(
         "LaserController",
         "setLaserValue",
@@ -131,18 +113,13 @@ def set_light(name, on):
     time.sleep(SETTLE)
 
 
-# Switch off the LED matrix, which LIGHTS does not cover.
-#
-# The matrix sits behind its own controller and getLaserNames does not report
-# it, so it needs a separate call or it stays lit and raises the dark frame.
-# The controller exposes setters only, with no way to ask whether the matrix is
-# on, so this writes unconditionally.
-#
-# 404 means the setup has no matrix, which is fine. Any other error is not: a
-# matrix that refuses to switch off invalidates the measurement.
-#
-# API: GET /api/LEDMatrixController/setAllLEDOff
 def led_matrix_off():
+    """Switch off the LED matrix, which LIGHTS does not cover.
+
+    The matrix sits behind its own controller, which exposes setters only, so
+    this writes unconditionally. 404 means the setup has no matrix; any other
+    error is one, because a lit matrix invalidates the dark frame.
+    """
     try:
         response = requests.get(
             f"{BASE_URL}/api/LEDMatrixController/setAllLEDOff",
@@ -157,34 +134,21 @@ def led_matrix_off():
     assert response.status_code == 200, response.text
 
 
-# Switch every configured light source off.
-#
-# API: GET /api/LaserController/setLaserValue   (via set_light, once per light)
-#      GET /api/LaserController/setLaserActive
-#      GET /api/LEDMatrixController/setAllLEDOff  (via led_matrix_off)
 def all_lights_off():
+    """Switch every configured light source off, matrix included."""
     for name in LIGHTS:
         set_light(name, False)
 
     led_matrix_off()
 
 
-
-
-# Keep the camera streaming for the duration of this module.
-#
-# LiveViewController owns the stream and reports real state. The older
-# ViewController/setLiveViewActive cannot be used on these rigs: its _acqHandle
-# is set at boot, so switching on returns 200 without starting anything and
-# switching off answers 500 "Invalid or already used handle" every time.
-#
-# API (setup):    POST /api/LiveViewController/startLiveView
-#                 GET  /api/LiveViewController/getLiveViewActive
-# API (teardown): GET  /api/LaserController/setLaserValue      (via all_lights_off)
-#                 GET  /api/LaserController/setLaserActive
-#                 GET  /api/LiveViewController/stopLiveView
 @pytest.fixture(scope="module", autouse=True)
 def camera_acquisition(detector_name, camera_status):
+    """Keep the camera streaming for the duration of this module.
+
+    LiveViewController owns the stream and reports real state; the older
+    ViewController/setLiveViewActive has a stale handle at boot on these rigs.
+    """
     started = api(
         "LiveViewController",
         "startLiveView",
@@ -193,17 +157,15 @@ def camera_acquisition(detector_name, camera_status):
     )
     status = started.get("status")
 
-    # startLiveView answers 200 even when it declines, so the body decides.
-    # A long exposure is a refusal rather than a failure: passing force=True
-    # would start the stream anyway, but frames would then be slower than the
-    # settle time this test assumes, so measuring light would be unreliable.
+    # startLiveView answers 200 even when it declines, so the body decides. A
+    # long exposure is a refusal rather than a failure: forcing it would make
+    # frames slower than SETTLE and the measurement unreliable.
     if status == "long_exposure":
         pytest.skip(
             f"{detector_name}: exposure too long for live view: {started}"
         )
 
-    # "already_running" is fine - the frontend or an earlier run may hold the
-    # stream, and an active stream is all this module needs.
+    # "already_running" is fine: an active stream is all this module needs.
     assert status in ("success", "already_running"), (
         f"{detector_name}: startLiveView did not start a stream: {started}"
     )
@@ -219,17 +181,15 @@ def camera_acquisition(detector_name, camera_status):
 
     all_lights_off()
 
-    # Only hand back what was taken. A stream that was already running before
-    # this module belongs to whoever started it, so leave it alone.
+    # Only hand back what was taken: a stream that was already running belongs
+    # to whoever started it.
     if status == "success":
         api("LiveViewController", "stopLiveView", detectorName=detector_name)
 
 
-# Use the requested detector or the first configured one.
-#
-# API: GET /api/SettingsController/getDetectorNames
 @pytest.fixture(scope="module")
 def detector_name():
+    """The requested detector, or the first configured one."""
     detectors = api("SettingsController", "getDetectorNames")
 
     if not detectors:
@@ -240,25 +200,14 @@ def detector_name():
     return DETECTOR or detectors[0]
 
 
-# Keep all light sources off before and after each test.
-#
-# API (setup and teardown): GET /api/LaserController/setLaserValue
-#                           GET /api/LaserController/setLaserActive
-#                           both via all_lights_off, once per light
 @pytest.fixture
 def light_source(request):
+    """Hand over one light source, with everything dark before and after."""
     all_lights_off()
     yield request.param
     all_lights_off()
 
 
-# Check each configured LED as a separate pytest test.
-#
-# API: GET /api/SettingsController/setDetectorExposureOnce  (via auto_exposure)
-#      GET /api/RecordingController/snapNumpyToFastAPI  (dark frame, via take_image)
-#      GET /api/LaserController/setLaserValue           (light on, via set_light)
-#      GET /api/LaserController/setLaserActive
-#      GET /api/RecordingController/snapNumpyToFastAPI  (bright frame, via take_image)
 @pytest.mark.hardware
 @pytest.mark.parametrize(
     "light_source",
@@ -273,11 +222,9 @@ def test_light_source_is_visible_to_camera(
     take_image,
     image_difference,
     ):
+    """Each LED must change the image by more than the camera noise floor."""
     # Before the baseline, never between the two frames: dark and bright have
-    # to be taken at the same exposure, otherwise the measured change is partly
-    # the exposure changing rather than light arriving. The session fixture
-    # runs the pass once, so with several lights only the first test pays for
-    # it and every light is then measured at the same exposure.
+    # to share one exposure, or the change is partly the exposure changing.
     auto_exposure(detector_name)
 
     dark, noise_floor, required_change = measure_dark_baseline(

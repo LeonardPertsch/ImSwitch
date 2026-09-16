@@ -1,3 +1,5 @@
+"""Check that the LED matrix accepts an off command over HTTP."""
+
 import os
 
 import pytest
@@ -10,11 +12,12 @@ BASE_URL = os.environ.get(
 )
 
 
-# GET an endpoint, skipping the test when ImSwitch cannot be reached at all.
-#
-# A refused connection says nothing about the LED matrix, so it has to skip
-# rather than fail — the suite is meant to be runnable without a rig.
 def get(path):
+    """GET an endpoint, skipping the test when ImSwitch is unreachable.
+
+    A refused connection says nothing about the matrix, and the suite is meant
+    to be runnable without a rig.
+    """
     try:
         return requests.get(f"{BASE_URL}/api/{path}", timeout=5)
     except requests.RequestException as exc:
@@ -22,6 +25,7 @@ def get(path):
 
 
 def get_available_controllers():
+    """Controllers of the active setup; the only way to spot the matrix."""
     response = get("getAvailableControllers")
 
     assert response.status_code == 200, (
@@ -34,10 +38,10 @@ def get_available_controllers():
 
 @pytest.mark.hardware
 def test_all_leds_off_is_accepted():
+    """setAllLEDOff must be accepted where the setup has a matrix."""
     controllers = get_available_controllers()
 
-    # Depending on the ImSwitch response format, controllers may be returned
-    # directly as a list or inside a dictionary.
+    # The response is either a plain list or a dictionary.
     if isinstance(controllers, dict):
         controllers = controllers.get(
             "controllers",

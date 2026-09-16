@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 
 # Run the camera-witnessed motion test on the remote Pi.
-# THIS MOVES THE STAGE: first to the transport position, then every axis out
-# and back.
 #
 #   ./run_motor_motion_camera.sh
+#   MOTION_CAMERA_DISTANCE_UM=500 ./run_motor_motion_camera.sh
+#
+# MOVES REAL HARDWARE: first to the transport position, then every axis out and
+# back.
 #
 # Everything goes through run_motor_test.sh, so its overrides and the
-# MOTION_CAMERA_* tuning knobs work here too:
-#
-#   MOTION_CAMERA_DISTANCE_UM=500 ./run_motor_motion_camera.sh
+# MOTION_CAMERA_* knobs work here too.
 
 set -euo pipefail
 

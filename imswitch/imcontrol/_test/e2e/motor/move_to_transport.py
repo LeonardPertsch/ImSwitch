@@ -1,18 +1,17 @@
 """Drive the stage to its stored transport position. Not a test.
 
-THIS MOVES THE STAGE. It is named without the test_ prefix on purpose, so
-pytest never collects it on its own. test_motor_motion_camera.py imports
-move_to_transport() to park the stage before it starts. Run it through
-run_move_to_transport.sh, or directly:
+MOVES REAL HARDWARE. Named without the test_ prefix so pytest never collects
+it; test_motor_motion_camera.py imports move_to_transport() to park the stage
+before it starts. Run it through run_move_to_transport.sh, or directly:
 
     IMSWITCH_URL=http://192.168.178.124:8000/imswitch python3 move_to_transport.py
 
 The target is whatever the setup stores as transportPositionA/X/Y/Z (see
-ESP32StageManager.transportPositions). Setups that do not set those keys fall
-back to X=65000, Y=40000; FRAME.json sets all of them to 0, which is the
-position behind the endstops, not the normal position.
+ESP32StageManager.transportPositions). Setups without those keys fall back to
+X=65000, Y=40000; FRAME.json sets all of them to 0, which is behind the
+endstops rather than the normal position.
 
-Note that moveToTransportPosition switches the Z hard limits off before moving
+moveToTransportPosition switches the Z hard limits off before moving
 (override_endstop_z defaults to True and the API does not expose it).
 """
 
@@ -28,13 +27,14 @@ BASE_URL = os.environ.get("IMSWITCH_URL", "http://localhost:8001")
 TIMEOUT = float(os.environ.get("TRANSPORT_TIMEOUT", "120"))
 
 # Motor speed for the transport move. The endpoint default is 10000.
-# Don't go higher than 30000
+# Don't go higher than 30000.
 SPEED = float(os.environ.get("TRANSPORT_SPEED", "20000"))
 
 POLL = 0.5
 
 
 def api(method, **params):
+    """Call one PositionerController endpoint and return its JSON."""
     response = requests.get(
         f"{BASE_URL}/api/PositionerController/{method}",
         params=params,
@@ -67,21 +67,16 @@ def wait_until_stopped():
 
 
 def move_to_transport():
-    """Drive to the transport position and return where the stage stopped.
-
-    API: GET /api/PositionerController/moveToTransportPosition
-    """
+    """Drive to the transport position and return where the stage stopped."""
     api("moveToTransportPosition", speed=SPEED, isBlocking=True)
 
     return wait_until_stopped()
 
 
 if __name__ == "__main__":
-    # API: GET /api/PositionerController/getPositionerNames
     if not api("getPositionerNames"):
         raise SystemExit("no positioner loaded in the current setup - nothing to move")
 
-    # API: GET /api/PositionerController/getTransportPosition
     print(f"transport position: {api('getTransportPosition')}")
     print(f"before:             {api('getPositionerPositions')}")
     print(f"after:              {move_to_transport()}")

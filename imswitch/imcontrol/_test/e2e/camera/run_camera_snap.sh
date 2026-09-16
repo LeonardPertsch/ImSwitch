@@ -1,24 +1,18 @@
 #!/usr/bin/env bash
 # Run the camera snap test on the Pi, inside the imswitch container.
-# One SSH connection, so one password prompt.
 #
 #   ./run_camera_snap.sh              # pytest run
 #   ./run_camera_snap.sh --curl       # quick check, saves the PNG locally
 #
-# Two different URLs are in play, because the two modes run in two places:
-#
-#   IMSWITCH_URL            ImSwitch as pytest sees it, from inside the
-#                           container: its own port, no caddy prefix.
-#   IMSWITCH_EXTERNAL_URL   ImSwitch as --curl sees it, from this machine:
-#                           through caddy on :8000 under /imswitch.
-#                           Derived from PI_HOST, so it follows the rig.
+# Two URLs, because the two modes run in two places: IMSWITCH_URL is ImSwitch
+# as pytest sees it from inside the container, IMSWITCH_EXTERNAL_URL as --curl
+# sees it from this machine (through caddy, derived from PI_HOST).
 #
 # Override with PI_HOST / IMSWITCH_CONTAINER / IMSWITCH_URL /
 # IMSWITCH_EXTERNAL_URL / IMSWITCH_DETECTOR.
 set -euo pipefail
 
-# Directory of this script. The shared conftest.py and colors.sh live one level
-# up, in the suite root.
+# conftest.py and colors.sh live one level up, in the suite root.
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
 . "$DIR/../colors.sh"
@@ -29,17 +23,15 @@ CONTAINER="${IMSWITCH_CONTAINER:-imswitch-server-1}"
 
 ENVS="-e IMSWITCH_URL=${IMSWITCH_URL:-http://localhost:8001}"
 
-# Forwarded only when set, so leaving it unset keeps the test's own behaviour
-# of snapping from the first detector the setup reports. Passing a default in
-# from here would override that with a guess.
+# Forwarded only when set, so the test keeps its own default of snapping from
+# the first detector the setup reports.
 [ -n "${IMSWITCH_DETECTOR:-}" ] && ENVS="$ENVS -e IMSWITCH_DETECTOR=$IMSWITCH_DETECTOR"
 
-# ${PI#*@} drops the ssh user, leaving the host the rig is actually on.
+# ${PI#*@} drops the ssh user, leaving the host the rig is on.
 EXTERNAL="${IMSWITCH_EXTERNAL_URL:-http://${PI#*@}:8000/imswitch}"
 
-# --curl cannot fall back to "first reported detector" the way the test does,
-# because the URL has to carry an explicit detectorName, so this one path needs
-# a concrete default of its own.
+# --curl needs an explicit detectorName in the URL, so it cannot fall back to
+# "first reported detector" and needs a concrete default of its own.
 CURL_DETECTOR="${IMSWITCH_DETECTOR:-RPiCam}"
 
 if [ "${1:-}" = "--curl" ]; then
@@ -49,11 +41,9 @@ if [ "${1:-}" = "--curl" ]; then
     exit 0
 fi
 
-# Ship the test together with the shared conftest.py from one level up, which
-# colours the progress percentage for skips. pytest reads it from the same
-# directory as the test, so both land in one temporary folder.
-# ustar carries no pax extended headers, so GNU tar on the Pi does not
-# warn about the SCHILY.fflags that macOS bsdtar would otherwise write.
+# Ship the shared conftest.py alongside the test: pytest reads it from the same
+# directory, so both land in one temporary folder. ustar carries no pax
+# headers, so GNU tar on the Pi does not warn about macOS SCHILY.fflags.
 tar --no-xattrs --format=ustar -czf - -C "$DIR/.." conftest.py -C "$DIR" test_camera_capture.py |
 ssh "$PI" "cat > /tmp/camera_tests.tgz \
     && docker cp /tmp/camera_tests.tgz $CONTAINER:/tmp/ >/dev/null \

@@ -8,10 +8,8 @@ import requests
 from PIL import ImageStat
 
 
-# Base URL of the ImSwitch HTTP API, as seen from wherever this test runs.
-# The runners execute pytest inside the container, where ImSwitch is on its
-# own port without the caddy prefix. From outside the Pi it is
-# http://<pi>:8000/imswitch instead, so set IMSWITCH_URL when running locally.
+# ImSwitch runs on :8001 without the caddy prefix inside the container; from
+# outside the Pi it is http://<pi>:8000/imswitch, so set IMSWITCH_URL then.
 BASE_URL = os.environ.get("IMSWITCH_URL", "http://localhost:8001")
 DETECTOR = os.environ.get("IMSWITCH_DETECTOR")
 
@@ -20,14 +18,8 @@ INTENSITY = int(os.environ.get("LEDMATRIX_INTENSITY", "500"))
 SETTLE = 0.5
 
 
-
-# Call an ImSwitch API endpoint and return JSON.
-#
-# Most endpoints are GET; LiveViewController/startLiveView is the one POST, so
-# the verb is a parameter rather than a second copy of this function.
-#
-# API: GET|POST {BASE_URL}/api/{controller}/{method}
 def api(controller, method, http="GET", **params):
+    """Call an ImSwitch endpoint and return its JSON."""
     send = requests.post if http == "POST" else requests.get
 
     response = send(
@@ -39,10 +31,8 @@ def api(controller, method, http="GET", **params):
     return response.json()
 
 
-
-#helpermethod for getting the available controllers from the ImSwitch API
-#because there is no way to know if the LEDMatrixController is available otherwise
 def get_available_controllers():
+    """Controllers of the active setup; the only way to spot the matrix."""
     response = requests.get(
         f"{BASE_URL}/api/getAvailableControllers",
         timeout=30,
@@ -56,17 +46,13 @@ def get_available_controllers():
     return response.json()
 
 
-# Call one LEDMatrixController endpoint and hand back the raw response.
-#
-# The controller exposes setters only, with no way to ask whether the matrix is
-# lit, so every caller writes rather than reads.
-#
-# This never skips. matrix_off runs from fixture teardown as well, and a
-# pytest.skip raised during teardown reports the test a second time. Skipping
-# on a missing controller happens once, in led_matrix_available.
-#
-# API: GET /api/LEDMatrixController/{method}
 def matrix(method, **params):
+    """Call one LEDMatrixController endpoint and return the raw response.
+
+    Never skips: matrix_off() also runs from teardown, where a pytest.skip
+    would report the test a second time. The missing-controller skip happens
+    once, in led_matrix_available.
+    """
     return requests.get(
         f"{BASE_URL}/api/LEDMatrixController/{method}",
         params=params,
@@ -74,10 +60,8 @@ def matrix(method, **params):
     )
 
 
-# Switch the matrix on at INTENSITY, white.
-#
-# API: GET /api/LEDMatrixController/setAllLED
 def matrix_on():
+    """Switch the matrix on at INTENSITY, white."""
     response = matrix(
         "setAllLED",
         intensity_r=INTENSITY,
@@ -89,11 +73,8 @@ def matrix_on():
     time.sleep(SETTLE)
 
 
-# Switch the matrix off. Safe to call from teardown: it never skips, and a
-# setup without the controller (404) is not an error here.
-#
-# API: GET /api/LEDMatrixController/setAllLEDOff
 def matrix_off():
+    """Switch the matrix off. Safe from teardown; 404 means no matrix."""
     try:
         response = matrix("setAllLEDOff")
     except requests.RequestException:
@@ -106,13 +87,8 @@ def matrix_off():
     time.sleep(SETTLE)
 
 
-# Switch off every laser/LED the setup reports, so that the matrix is the only
-# thing that can change the image.
-#
-# API: GET /api/LaserController/getLaserNames
-#      GET /api/LaserController/setLaserValue
-#      GET /api/LaserController/setLaserActive
 def lasers_off():
+    """Switch off every laser/LED, so only the matrix can change the image."""
     try:
         names = api("LaserController", "getLaserNames")
     except requests.RequestException:
@@ -123,12 +99,9 @@ def lasers_off():
         api("LaserController", "setLaserActive", laserName=name, active=False)
 
 
-
-# Use the requested detector or the first configured one.
-#
-# API: GET /api/SettingsController/getDetectorNames
 @pytest.fixture(scope="module")
 def detector_name():
+    """The requested detector, or the first configured one."""
     try:
         detectors = api("SettingsController", "getDetectorNames")
     except requests.RequestException as exc:
@@ -144,6 +117,7 @@ def detector_name():
 
 @pytest.fixture(scope="module")
 def camera_status(detector_name):
+    """Status of the detector under test; skips on an ImSwitch mock camera."""
     status = api(
         "SettingsController",
         "getCameraStatus",
@@ -163,16 +137,7 @@ def camera_status(detector_name):
 
     return status
 
-# Keep the camera streaming for the duration of this module.
-#
-# LiveViewController owns the stream and reports real state. The older
-# ViewController/setLiveViewActive cannot be used on these rigs: switching on
-# returns 200 without starting anything and switching off answers 500.
-#
-# API (setup):    POST /api/LiveViewController/startLiveView
-#                 GET  /api/LiveViewController/getLiveViewActive
-# API (teardown): GET  /api/LEDMatrixController/setAllLEDOff
-#                 GET  /api/LiveViewController/stopLiveView
+
 @pytest.fixture(scope="module")
 def led_matrix_available():
     """Skip the module unless this setup actually has an LED matrix."""
@@ -182,7 +147,7 @@ def led_matrix_available():
     except requests.RequestException as exc:
         pytest.skip(f"ImSwitch not reachable at {BASE_URL}: {exc}")
 
-    # Support either a plain list or a dictionary response.
+    # The response is either a plain list or a dictionary.
     if isinstance(controllers, dict):
         controllers = controllers.get(
             "controllers",
@@ -196,6 +161,11 @@ def led_matrix_available():
 
 @pytest.fixture(scope="module", autouse=True)
 def camera_acquisition(led_matrix_available, detector_name, camera_status):
+    """Keep the camera streaming for the duration of this module.
+
+    LiveViewController owns the stream and reports real state; the older
+    ViewController/setLiveViewActive has a stale handle at boot on these rigs.
+    """
     started = api(
         "LiveViewController",
         "startLiveView",
@@ -208,7 +178,7 @@ def camera_acquisition(led_matrix_available, detector_name, camera_status):
     if status == "long_exposure":
         pytest.skip(f"{detector_name}: exposure too long for live view: {started}")
 
-    # "already_running" is fine - an active stream is all this module needs.
+    # "already_running" is fine: an active stream is all this module needs.
     assert status in ("success", "already_running"), (
         f"{detector_name}: startLiveView did not start a stream: {started}"
     )
@@ -226,7 +196,7 @@ def camera_acquisition(led_matrix_available, detector_name, camera_status):
     try:
         matrix_off()
     finally:
-        # Only hand back what was taken; a stream that was already running
+        # Only hand back what was taken: a stream that was already running
         # belongs to whoever started it.
         if status == "success":
             api(
@@ -236,12 +206,9 @@ def camera_acquisition(led_matrix_available, detector_name, camera_status):
             )
 
 
-# Leave the rig dark before and after the test, matrix included.
-#
-# API: GET /api/LaserController/*                    (via lasers_off)
-#      GET /api/LEDMatrixController/setAllLEDOff     (via matrix_off)
 @pytest.fixture
 def dark_rig():
+    """Leave the rig dark before and after the test, matrix included."""
     lasers_off()
     matrix_off()
 
@@ -251,15 +218,6 @@ def dark_rig():
     matrix_off()
 
 
-# The one test that proves light from the matrix physically reached the sensor.
-#
-# Everything else in e2e/ reads back state that software set a call earlier.
-# This compares two actual frames, so it cannot pass without photons.
-#
-# API: GET /api/SettingsController/setDetectorExposureOnce  (via auto_exposure)
-#      GET /api/RecordingController/snapNumpyToFastAPI  (dark, via settled_dark_frame)
-#      GET /api/LEDMatrixController/setAllLED           (matrix on, via matrix_on)
-#      GET /api/RecordingController/snapNumpyToFastAPI  (bright, via take_image)
 @pytest.mark.hardware
 def test_led_matrix_is_visible_to_camera(
     dark_rig,
@@ -269,14 +227,17 @@ def test_led_matrix_is_visible_to_camera(
     take_image,
     image_difference,
 ):
+    """The matrix must change the image by more than the camera noise floor.
+
+    This compares two real frames, so unlike the state readbacks elsewhere in
+    e2e/ it cannot pass without photons.
+    """
     auto_exposure(detector_name)
 
-    # Measure the current camera noise while everything is dark.
     dark, noise_floor, required_change = measure_dark_baseline(
         detector_name
     )
 
-    # Now switch on only the LED matrix.
     matrix_on()
 
     bright = take_image(detector_name)

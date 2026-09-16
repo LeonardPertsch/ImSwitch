@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Run the whole e2e suite on the Pi, inside the imswitch container.
 #
+# MOVES THE STAGE: parks it at the transport position once before the tests,
+# so every run starts from the same place. Runs for a folder filter too.
+#
 #   ./run_all.sh                 # everything
 #   ./run_all.sh camera          # only camera/
 #   ./run_all.sh laser photon    # several folders
@@ -20,7 +23,8 @@ ENVS="-e IMSWITCH_URL=http://localhost:8001"
 # Names must match the os.environ lookups exactly: an unread name is handed to
 # docker and then silently ignored.
 KNOBS="IMSWITCH_DETECTOR UC2_LASER_VALUE PHOTON_MIN_DELTA
-       PHOTON_SETTLE_TOLERANCE LEDMATRIX_INTENSITY AUTO_EXPOSURE_RESET_MS"
+       PHOTON_SETTLE_TOLERANCE LEDMATRIX_INTENSITY AUTO_EXPOSURE_RESET_MS
+       TRANSPORT_TIMEOUT TRANSPORT_SPEED"
 
 for knob in $KNOBS; do
     [ -n "${!knob:-}" ] && ENVS="$ENVS -e $knob=${!knob}"
@@ -51,7 +55,12 @@ tar --no-xattrs --format=ustar -czf - -C "$DIR" . | ssh "${SSH_OPTS[@]}" "$PI" "
 SSH_TTY_FLAG="" DOCKER_TTY_FLAG=""
 if [ -t 0 ]; then SSH_TTY_FLAG="-t" DOCKER_TTY_FLAG="-it"; fi
 
+# Park the stage first, so every run starts from the same place. A setup
+# without a positioner makes this fail, which must not cost us the tests.
 ssh $SSH_TTY_FLAG "${SSH_OPTS[@]}" "$PI" "
+    docker exec $ENVS $CONTAINER python3 /tmp/e2e/motor/move_to_transport.py ||
+        echo 'run_all: transport move failed, running the tests anyway' >&2
+
     docker exec $DOCKER_TTY_FLAG $ENVS $CONTAINER python3 -m pytest $TARGETS \
         -v -ra --tb=line $COLOR -p no:arkitekt_next -p no:cacheprovider -o markers=hardware
 "

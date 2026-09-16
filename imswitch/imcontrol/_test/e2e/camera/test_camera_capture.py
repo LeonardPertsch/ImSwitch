@@ -1,3 +1,5 @@
+"""Check that every configured detector returns a valid image frame."""
+
 import base64
 import os
 import struct
@@ -27,11 +29,13 @@ Frame = namedtuple("Frame", "raw width height resize_factor")
 
 
 def png_dimensions(raw):
+    """Width and height from a PNG header."""
     assert raw[:8] == PNG_SIGNATURE, "response body is not a PNG"
     return struct.unpack(">II", raw[16:24])
 
 
 def jpeg_dimensions(raw):
+    """Width and height from the first JPEG start-of-frame header."""
     assert raw[:2] == JPEG_SOI, "image is not a JPEG"
 
     offset = 2
@@ -50,23 +54,12 @@ def jpeg_dimensions(raw):
 
 
 def is_observation_camera(detector_name):
+    """True for the observation camera, which needs its own snap endpoint."""
     return "observ" in detector_name.lower()
 
 
-# ---------------------------------------------------------------------------
-# Detector discovery
-# ---------------------------------------------------------------------------
-
 def get_detector_names():
-    """
-    Get all detectors from the currently active ImSwitch setup.
-
-    If IMSWITCH_DETECTOR is set, only that detector is tested.
-
-    API:
-        GET /api/SettingsController/getDetectorNames
-    """
-
+    """Detectors of the active setup, or only IMSWITCH_DETECTOR when set."""
     response = requests.get(
         f"{BASE_URL}/api/SettingsController/getDetectorNames",
         timeout=5,
@@ -87,15 +80,7 @@ def get_detector_names():
 
 
 def pytest_generate_tests(metafunc):
-    """
-    Generate one pytest test case per configured detector.
-
-    Example:
-
-        test_camera_returns_image[HikCam]
-        test_camera_returns_image[RPiCam]
-    """
-
+    """One test case per configured detector, named after it."""
     if "detector_name" not in metafunc.fixturenames:
         return
 
@@ -142,21 +127,9 @@ def pytest_generate_tests(metafunc):
     )
 
 
-# ---------------------------------------------------------------------------
-# Camera status
-# ---------------------------------------------------------------------------
-
 @pytest.fixture
 def camera_status(detector_name):
-    """
-    Full status of the detector under test.
-
-    Also prevents tests from passing against an ImSwitch mock camera.
-
-    API:
-        GET /api/SettingsController/getCameraStatus
-    """
-
+    """Status of the detector under test; skips on an ImSwitch mock camera."""
     response = requests.get(
         f"{BASE_URL}/api/SettingsController/getCameraStatus",
         params={"detectorName": detector_name},
@@ -184,21 +157,8 @@ def camera_status(detector_name):
     return status
 
 
-# ---------------------------------------------------------------------------
-# Snap
-# ---------------------------------------------------------------------------
-
 def snap(detector_name):
-    """
-    Request one camera frame from ImSwitch.
-
-    The observation camera goes through snap_observation(); every other
-    detector through RecordingController.
-
-    API:
-        GET /api/RecordingController/snapNumpyToFastAPI
-    """
-
+    """One frame: observation camera apart, every detector via Recording."""
     if is_observation_camera(detector_name):
         return snap_observation()
 
@@ -220,23 +180,12 @@ def snap(detector_name):
 
 
 def snap_observation():
+    """One full-resolution JPEG frame from the observation camera.
+
+    snapNumpyToFastAPI only serves detectors with forAcquisition=true and
+    answers 500 for this one. snapOverviewImage reads the latest frame directly
+    and picks the camera itself; camera_name only names the folder on the Pi.
     """
-    Request one frame from the observation camera.
-
-    snapNumpyToFastAPI only collects detectors with forAcquisition=true. The
-    observation camera has it false, so that endpoint answers 500 (KeyError)
-    for it. snapOverviewImage reads the camera's latest frame directly and
-    returns it as a full-resolution JPEG, without touching the setup file.
-
-    It picks the camera itself (experiment.overviewCameraName, else the
-    detector named ObservationCamera). camera_name only names the folder the
-    snapshot PNG is saved in on the Pi, kept separate from real overview
-    registrations.
-
-    API:
-        POST /api/ExperimentController/snapOverviewImage
-    """
-
     response = requests.post(
         f"{BASE_URL}/api/ExperimentController/snapOverviewImage",
         params={"slot_id": "1", "camera_name": "e2e_camera_test"},
@@ -255,17 +204,10 @@ def snap_observation():
     return Frame(raw, width, height, 1.0)
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
 @pytest.mark.hardware
 @pytest.mark.usefixtures("camera_status")
 def test_camera_returns_image(detector_name):
-    """
-    Every real configured detector must return a valid image frame.
-    """
-
+    """Every real configured detector must return a valid image frame."""
     frame = snap(detector_name)
 
     assert frame.width > 0
@@ -275,11 +217,7 @@ def test_camera_returns_image(detector_name):
 
 @pytest.mark.hardware
 def test_camera_matches_sensor_resolution(detector_name, camera_status):
-    """
-    Compare the returned image size against the resolution reported
-    by the individual detector.
-    """
-
+    """The frame size must match the resolution the detector reports."""
     full_width = (
         camera_status.get("currentWidth")
         or camera_status.get("sensorWidth")

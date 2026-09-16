@@ -1,26 +1,20 @@
+"""Check that every configured laser/LED switches through the ImSwitch API."""
+
 import os
 
 import pytest
 import requests
 
 
-# Base URL of the ImSwitch HTTP API, as seen from wherever this test runs.
-# The runners execute pytest inside the container, where ImSwitch is on its
-# own port without the caddy prefix. From outside the Pi it is
-# http://<pi>:8000/imswitch instead, so set IMSWITCH_URL when running locally.
+# ImSwitch runs on :8001 without the caddy prefix inside the container; from
+# outside the Pi it is http://<pi>:8000/imswitch, so set IMSWITCH_URL then.
 BASE_URL = os.environ.get("IMSWITCH_URL", "http://localhost:8001")
 
-# Base endpoint for all LaserController API calls.
 LASER_API = f"{BASE_URL}/api/LaserController"
 
 
-# Call one LaserController endpoint.
-# The request must return HTTP 200; otherwise the current test fails immediately.
-# The JSON response from ImSwitch is returned to the caller.
-#
-# API: GET {BASE_URL}/api/LaserController/{method}
-#      every call in this file goes through here
 def call(method, **params):
+    """Call one LaserController endpoint and return its JSON."""
     response = requests.get(
         f"{LASER_API}/{method}",
         params=params,
@@ -34,15 +28,12 @@ def call(method, **params):
     return response.json()
 
 
-# Read all lasers/LEDs from the currently active ImSwitch setup.
-# This happens when pytest collects the tests so that pytest can create one
-# separate test case for every reported laser.
-#
-# The setup is read by ImSwitch at startup. If the setup file was changed,
-# ImSwitch must be restarted before the new laser list appears here.
-#
-# API: GET /api/LaserController/getLaserNames
 def get_laser_params():
+    """One pytest parameter per laser/LED of the active setup.
+
+    Read at collection time. ImSwitch reads the setup at startup, so it must be
+    restarted before a changed laser list appears here.
+    """
     try:
         response = requests.get(
             f"{BASE_URL}/api/AcceptanceTestController/getAvailableLightSources",
@@ -78,8 +69,7 @@ def get_laser_params():
             )
         ]
 
-    # Give every laser its own pytest parameter and use the laser name as the
-    # test ID so that it is directly visible in the terminal output.
+    # The laser name becomes the test ID, so it is visible in the output.
     return [
         pytest.param(
             laser_name,
@@ -89,14 +79,12 @@ def get_laser_params():
     ]
 
 
-# Provide one laser to one test invocation.
-# After that individual test finishes, the same laser is forced to value 0
-# and disabled so that a failed test cannot intentionally leave it active.
-#
-# API (teardown only): GET /api/LaserController/setLaserValue
-#                      GET /api/LaserController/setLaserActive
 @pytest.fixture
 def safe_laser(request):
+    """Hand over one laser and force it back to 0/inactive afterwards.
+
+    Teardown runs even when the test fails, so none is left emitting.
+    """
     laser_name = request.param
 
     yield laser_name
@@ -116,28 +104,6 @@ def safe_laser(request):
             )
 
 
-# Test every laser/LED reported by the active ImSwitch setup as a separate
-# pytest test case.
-#
-# For each laser:
-# 1. Set a positive laser value.
-# 2. Enable the laser through the HTTP API.
-# 3. Verify that ImSwitch reports it as active.
-# 4. Verify that ImSwitch reports a positive value.
-# 5. Disable the laser.
-# 6. Verify that ImSwitch reports it as inactive.
-#
-# This proves that the requests pass through the ImSwitch API without an error
-# and that ImSwitch updates its internal state.
-#
-# It does not prove that physical light was emitted because getLaserActive and
-# getLaserValue read back ImSwitch-side state rather than an independent optical
-# measurement.
-#
-# API: GET /api/LaserController/setLaserValue   (value=500, later value=0)
-#      GET /api/LaserController/setLaserActive  (active=True, later active=False)
-#      GET /api/LaserController/getLaserActive  (read back)
-#      GET /api/LaserController/getLaserValue   (read back)
 @pytest.mark.hardware
 @pytest.mark.parametrize(
     "safe_laser",
@@ -145,29 +111,31 @@ def safe_laser(request):
     indirect=True,
 )
 def test_laser_reports_active(safe_laser):
+    """Enable one laser, read active and value back, disable it again.
+
+    This proves the API path and that ImSwitch updates its own state. It does
+    not prove that light was emitted - the readbacks are ImSwitch-side, not an
+    optical measurement; test_laser_photon.py covers that.
+    """
     laser_name = safe_laser
 
-    # Set a positive value for this laser before enabling it.
     call(
         "setLaserValue",
         laserName=laser_name,
         value=1,
     )
 
-    # Enable this laser through the ImSwitch HTTP API.
     call(
         "setLaserActive",
         laserName=laser_name,
         active=True,
     )
 
-    # Verify that ImSwitch reports this laser as active.
     assert call(
         "getLaserActive",
         laserName=laser_name,
     ) is True, f"{laser_name}: did not become active"
 
-    # Verify that ImSwitch reports a positive value for this laser.
     assert (
         call(
             "getLaserValue",
@@ -175,20 +143,17 @@ def test_laser_reports_active(safe_laser):
         ) or 0
     ) > 0, f"{laser_name}: laser value is not positive"
 
-    # Disable this laser again before completing its individual test.
     call(
         "setLaserActive",
         laserName=laser_name,
         active=False,
     )
 
-    # Verify that ImSwitch now reports this laser as inactive.
     assert call(
         "getLaserActive",
         laserName=laser_name,
     ) is False, f"{laser_name}: did not become inactive"
 
-    # Reset the value to zero after the functional checks have passed.
     call(
         "setLaserValue",
         laserName=laser_name,

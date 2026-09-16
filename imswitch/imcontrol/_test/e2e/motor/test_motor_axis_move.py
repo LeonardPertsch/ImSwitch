@@ -14,6 +14,7 @@ SETTLE = 0.5
 
 
 def api(method, **params):
+    """Call one PositionerController endpoint and return its JSON."""
     response = requests.get(
         f"{BASE_URL}/api/PositionerController/{method}",
         params=params,
@@ -26,8 +27,8 @@ def api(method, **params):
 def get_axes():
     """Every axis the setup reports, as (positioner, axis) pairs.
 
-    Returns [] rather than raising: pytest evaluates parametrize arguments
-    while collecting, so an exception here aborts collection for the whole
+    Returns [] rather than raising: parametrize arguments are evaluated at
+    collection, so an exception here would abort collection for the whole
     suite instead of skipping this one file.
     """
     try:
@@ -48,6 +49,7 @@ def get_axes():
     get_axes() or [(None, None)],
 )
 def test_axis_moves_by_step(positioner, axis):
+    """Each axis must report the requested step, then move back."""
     if positioner is None:
         pytest.skip("no positioner axes reported — ImSwitch or setup unavailable")
 

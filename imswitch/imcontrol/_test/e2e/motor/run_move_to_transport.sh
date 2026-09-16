@@ -5,11 +5,11 @@
 #
 #   ./run_move_to_transport.sh
 #
-# THIS MOVES THE STAGE. See move_to_transport.py for where the target comes
-# from and why Z hard limits are off during the move.
+# MOVES REAL HARDWARE. See move_to_transport.py for where the target comes from
+# and why the Z hard limits are off during the move.
 #
-# Override with PI_HOST / IMSWITCH_CONTAINER / IMSWITCH_URL / TRANSPORT_TIMEOUT /
-# TRANSPORT_SPEED.
+# Override with PI_HOST / IMSWITCH_CONTAINER / IMSWITCH_URL /
+# TRANSPORT_TIMEOUT / TRANSPORT_SPEED.
 
 set -euo pipefail
 
@@ -26,7 +26,7 @@ ENVS="-e IMSWITCH_URL=$IMSWITCH_URL"
 [ -n "${TRANSPORT_TIMEOUT:-}" ] && ENVS="$ENVS -e TRANSPORT_TIMEOUT=$TRANSPORT_TIMEOUT"
 [ -n "${TRANSPORT_SPEED:-}" ] && ENVS="$ENVS -e TRANSPORT_SPEED=$TRANSPORT_SPEED"
 
-# A single file needs no tar/docker cp round trip: it is piped through ssh
-# into python's stdin, and docker exec -i keeps that stdin open.
+# A single file needs no tar/docker cp round trip: it is piped through ssh into
+# python's stdin, and docker exec -i keeps that stdin open.
 ssh "$PI" "docker exec -i $ENVS '$CONTAINER' '$PYTHON_BIN' -" \
     < "$LOCAL_DIR/move_to_transport.py"
