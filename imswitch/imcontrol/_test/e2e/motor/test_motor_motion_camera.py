@@ -58,6 +58,12 @@ Z_DIRECTION = int(
         "-1",
     )
 )
+Z_DISTANCE_UM = int(
+    os.environ.get(
+        "MOTION_CAMERA_Z_DISTANCE_UM",
+        "5000",
+    )
+)
 
 # Motor speed passed to movePositioner.
 #
@@ -591,10 +597,10 @@ def measure_axis_motion(
 
     # First move is positive for every axis except Z.
     distance = (
-        DISTANCE_UM * Z_DIRECTION
-        if axis.upper() == "Z"
-        else DISTANCE_UM
-    )
+    Z_DISTANCE_UM * Z_DIRECTION
+    if axis.upper() == "Z"
+    else DISTANCE_UM
+)
 
     print(
         f"\nMeasuring {positioner} {axis}"

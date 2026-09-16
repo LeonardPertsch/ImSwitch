@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 
-# Run UC2 hardware tests inside the remote ImSwitch container.
+# Run the UC2 board tests on the remote Pi inside the ImSwitch container.
+#
+#   ./run_board_test.sh
+#
+# Override with PI_HOST / IMSWITCH_CONTAINER / IMSWITCH_URL / PYTHON_BIN /
+# REMOTE_TEST_DIR.
 
 set -euo pipefail
 
@@ -16,8 +21,8 @@ LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 ENVS="-e IMSWITCH_URL=$IMSWITCH_URL"
 
-# ustar carries no pax extended headers, so GNU tar on the Pi does not
-# warn about the SCHILY.fflags that macOS bsdtar would otherwise write.
+# ustar carries no pax headers, so GNU tar on the Pi does not warn about the
+# SCHILY.fflags macOS bsdtar would write.
 tar --no-xattrs --format=ustar -czf - \
     -C "$LOCAL_DIR/.." conftest.py \
     -C "$LOCAL_DIR" . |

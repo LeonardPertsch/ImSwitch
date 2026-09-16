@@ -1,4 +1,4 @@
-"""Shared pytest behaviour for the e2e suite."""
+"""Shared fixtures for the e2e suite: frame capture and photon thresholds."""
 import io
 import os
 import time
@@ -9,9 +9,8 @@ from PIL import Image, ImageChops, ImageStat
 
 BASE_URL = os.environ.get("IMSWITCH_URL", "http://localhost:8001")
 
-# How long setDetectorExposureOnce stays in auto before its timer restores
-# manual mode. The wait below has to outlast it, or the detector is still in
-# 'once' while the first frame is taken.
+# Must outlast setDetectorExposureOnce's reset timer, or the first frame is
+# still taken while the detector is in 'once' mode.
 AUTO_EXPOSURE_RESET_MS = int(
     os.environ.get("AUTO_EXPOSURE_RESET_MS", "1500")
 )
@@ -35,10 +34,8 @@ PHOTON_NOISE_DELAY = float(
 PHOTON_RESIZE = 0.25
 
 
-# Read the detector's current exposure in ms, or None if it cannot be read.
-#
-# API: GET /api/SettingsController/getCameraStatus
 def _exposure_ms(detector):
+    """Current detector exposure in ms, or None if it cannot be read."""
     try:
         response = requests.get(
             f"{BASE_URL}/api/SettingsController/getCameraStatus",
@@ -91,7 +88,7 @@ def image_difference():
 
 @pytest.fixture
 def measure_dark_baseline(take_image, image_difference):
-    """Measure current camera noise and return a dark reference frame."""
+    """Measure camera noise, returning (dark frame, noise floor, threshold)."""
 
     def run(detector):
         previous = take_image(detector)
@@ -125,30 +122,14 @@ def measure_dark_baseline(take_image, image_difference):
 
     return run
 
-# One-shot auto exposure, run at most once per pytest session.
-#
-# Returns a callable rather than doing the work itself, because the right
-# moment is decided by the caller: live view has to be streaming and the scene
-# has to be in the state that should be exposed for. A session-scoped fixture
-# is created before the module-scoped one that starts live view, so doing the
-# work here directly would expose a camera that is not yet acquiring.
-#
-# Session scope is what makes "once" mean the right thing in both directions.
-# run_all.sh puts laser and ledmatrix in a single session, so the pass happens
-# one time for both; running either folder on its own is its own session and
-# gets its own pass. Repeat calls return the first result unchanged.
-#
-# Not autouse: the camera tests check frame geometry and do not care about
-# exposure, so only the photon tests ask for this.
-#
-# Note that the endpoint swallows its own errors and answers 200 either way, so
-# the only evidence it did anything is the exposure value itself - which is why
-# both the before and after values are returned.
-#
-# API: GET /api/SettingsController/setDetectorExposureOnce
-#      GET /api/SettingsController/getCameraStatus  (before and after)
 @pytest.fixture(scope="session")
 def auto_exposure():
+    """Run one-shot auto exposure, at most once per pytest session.
+
+    Returns a callable because only the caller knows when live view is
+    streaming and the scene is in the state to expose for. The endpoint answers
+    200 even on failure, so the exposure before and after is the only evidence.
+    """
     state = {}
 
     def run(detector):
@@ -168,8 +149,8 @@ def auto_exposure():
             )
             assert response.status_code == 200, response.text
 
-            # Outlast the timer that restores manual mode, plus a margin for
-            # the exposure to actually be applied to the running stream.
+            # Outlast the reset timer, plus a margin for the new exposure to
+            # reach the running stream.
             time.sleep(AUTO_EXPOSURE_RESET_MS / 1000 + 0.1)
 
         except requests.RequestException:
