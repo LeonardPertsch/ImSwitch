@@ -34,8 +34,8 @@ def test_uc2_board_connected():
 
 
 @pytest.mark.hardware
-def test_uc2_board_responds():
-    """The board must answer with firmware information."""
+def test_correct_esp32_firmware():
+    """The connected ESP32 must run the CANopen master firmware."""
     response = get("UC2ConfigController/getFirmwareInfo")
 
     if response.status_code == 404:
@@ -43,8 +43,22 @@ def test_uc2_board_responds():
             "getFirmwareInfo endpoint not available in this ImSwitch version"
         )
 
-    # Status before body: a non-JSON error page would otherwise raise a decode
-    # error instead of the assertion that says what went wrong.
     assert response.status_code == 200, response.text
 
-    assert response.json(), "UC2 board returned no firmware information"
+    info = response.json()
+
+    assert info, "UC2 board returned no firmware information"
+
+    print(f"\nESP32 firmware: {info}")
+
+    assert info.get("connected") is True, (
+        f"ESP32 not connected: {info}"
+    )
+
+    assert info.get("isMaster") is True, (
+        f"ESP32 is not the CANopen master: {info}"
+    )
+
+    assert info.get("pindef") == "UC2_canopen_master", (
+        f"wrong firmware type: {info.get('pindef')}"
+    )

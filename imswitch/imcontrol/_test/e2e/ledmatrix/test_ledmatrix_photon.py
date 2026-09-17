@@ -31,6 +31,11 @@ def api(controller, method, http="GET", **params):
     return response.json()
 
 
+def is_observation_camera(detector):
+    """True for the observation camera, which has no acquisition path."""
+    return "observ" in detector.lower()
+
+
 def get_available_controllers():
     """Controllers of the active setup; the only way to spot the matrix."""
     response = requests.get(
@@ -99,9 +104,13 @@ def lasers_off():
         api("LaserController", "setLaserActive", laserName=name, active=False)
 
 
-@pytest.fixture(scope="module")
-def detector_name():
-    """The requested detector, or the first configured one."""
+@pytest.fixture(scope="module", params=["acquisition", "observation"])
+def detector_name(request):
+    """Run every test twice: acquisition detector, then observation camera.
+
+    The observation camera only exists on some rigs, so that parameter skips
+    where the setup has none.
+    """
     try:
         detectors = api("SettingsController", "getDetectorNames")
     except requests.RequestException as exc:
@@ -109,10 +118,35 @@ def detector_name():
 
     if not detectors:
         pytest.skip("active setup has no detectors")
-    if DETECTOR and DETECTOR not in detectors:
-        pytest.skip(f"detector {DETECTOR!r} not found (available: {detectors})")
 
-    return DETECTOR or detectors[0]
+    if request.param == "observation":
+        camera = next(
+            (name for name in detectors if is_observation_camera(name)),
+            None,
+        )
+
+        if camera is None:
+            pytest.skip(f"no observation camera in this setup: {detectors}")
+
+        return camera
+
+    if DETECTOR:
+        if DETECTOR not in detectors:
+            pytest.skip(
+                f"detector {DETECTOR!r} not found (available: {detectors})"
+            )
+
+        return DETECTOR
+
+    # The observation camera has its own parameter, so it is not the fallback.
+    acquisition = [
+        name for name in detectors if not is_observation_camera(name)
+    ]
+
+    if not acquisition:
+        pytest.skip("setup has no acquisition detector")
+
+    return acquisition[0]
 
 
 @pytest.fixture(scope="module")
@@ -165,30 +199,35 @@ def camera_acquisition(led_matrix_available, detector_name, camera_status):
 
     LiveViewController owns the stream and reports real state; the older
     ViewController/setLiveViewActive has a stale handle at boot on these rigs.
+    The observation camera is left alone: snapOverviewImage reads its latest
+    frame directly, so it needs no stream of its own.
     """
-    started = api(
-        "LiveViewController",
-        "startLiveView",
-        http="POST",
-        detectorName=detector_name,
-    )
-    status = started.get("status")
+    status = None
 
-    # startLiveView answers 200 even when it declines, so the body decides.
-    if status == "long_exposure":
-        pytest.skip(f"{detector_name}: exposure too long for live view: {started}")
+    if not is_observation_camera(detector_name):
+        started = api(
+            "LiveViewController",
+            "startLiveView",
+            http="POST",
+            detectorName=detector_name,
+        )
+        status = started.get("status")
 
-    # "already_running" is fine: an active stream is all this module needs.
-    assert status in ("success", "already_running"), (
-        f"{detector_name}: startLiveView did not start a stream: {started}"
-    )
+        # startLiveView answers 200 even when it declines, so the body decides.
+        if status == "long_exposure":
+            pytest.skip(f"{detector_name}: exposure too long for live view: {started}")
 
-    assert api("LiveViewController", "getLiveViewActive") is True, (
-        f"{detector_name}: getLiveViewActive is False right after "
-        f"startLiveView returned {status!r}"
-    )
+        # "already_running" is fine: an active stream is all this module needs.
+        assert status in ("success", "already_running"), (
+            f"{detector_name}: startLiveView did not start a stream: {started}"
+        )
 
-    time.sleep(0.4)
+        assert api("LiveViewController", "getLiveViewActive") is True, (
+            f"{detector_name}: getLiveViewActive is False right after "
+            f"startLiveView returned {status!r}"
+        )
+
+        time.sleep(0.4)
 
     yield
 
@@ -230,9 +269,13 @@ def test_led_matrix_is_visible_to_camera(
     """The matrix must change the image by more than the camera noise floor.
 
     This compares two real frames, so unlike the state readbacks elsewhere in
-    e2e/ it cannot pass without photons.
+    e2e/ it cannot pass without photons. Runs once per camera: the acquisition
+    detector and, where the rig has one, the observation camera.
     """
-    auto_exposure(detector_name)
+    # Acquisition detector only: the pass runs once per session, and the
+    # observation camera has no live stream for it to act on.
+    if not is_observation_camera(detector_name):
+        auto_exposure(detector_name)
 
     dark, noise_floor, required_change = measure_dark_baseline(
         detector_name

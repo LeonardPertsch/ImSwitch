@@ -34,6 +34,11 @@ def api(controller, method, http="GET", **params):
     return response.json()
 
 
+def is_observation_camera(detector):
+    """True for the observation camera, which has no acquisition path."""
+    return "observ" in detector.lower()
+
+
 def get_lights():
     """Names of all configured light sources, or [] if unreachable."""
     try:
@@ -148,34 +153,39 @@ def camera_acquisition(detector_name, camera_status):
 
     LiveViewController owns the stream and reports real state; the older
     ViewController/setLiveViewActive has a stale handle at boot on these rigs.
+    The observation camera is left alone: snapOverviewImage reads its latest
+    frame directly, so it needs no stream of its own.
     """
-    started = api(
-        "LiveViewController",
-        "startLiveView",
-        http="POST",
-        detectorName=detector_name,
-    )
-    status = started.get("status")
+    status = None
 
-    # startLiveView answers 200 even when it declines, so the body decides. A
-    # long exposure is a refusal rather than a failure: forcing it would make
-    # frames slower than SETTLE and the measurement unreliable.
-    if status == "long_exposure":
-        pytest.skip(
-            f"{detector_name}: exposure too long for live view: {started}"
+    if not is_observation_camera(detector_name):
+        started = api(
+            "LiveViewController",
+            "startLiveView",
+            http="POST",
+            detectorName=detector_name,
+        )
+        status = started.get("status")
+
+        # startLiveView answers 200 even when it declines, so the body decides.
+        # A long exposure is a refusal rather than a failure: forcing it would
+        # make frames slower than SETTLE and the measurement unreliable.
+        if status == "long_exposure":
+            pytest.skip(
+                f"{detector_name}: exposure too long for live view: {started}"
+            )
+
+        # "already_running" is fine: an active stream is all this module needs.
+        assert status in ("success", "already_running"), (
+            f"{detector_name}: startLiveView did not start a stream: {started}"
         )
 
-    # "already_running" is fine: an active stream is all this module needs.
-    assert status in ("success", "already_running"), (
-        f"{detector_name}: startLiveView did not start a stream: {started}"
-    )
+        assert api("LiveViewController", "getLiveViewActive") is True, (
+            f"{detector_name}: getLiveViewActive is False right after "
+            f"startLiveView returned {status!r}"
+        )
 
-    assert api("LiveViewController", "getLiveViewActive") is True, (
-        f"{detector_name}: getLiveViewActive is False right after "
-        f"startLiveView returned {status!r}"
-    )
-
-    time.sleep(0.4)
+        time.sleep(0.4)
 
     yield
 
@@ -187,17 +197,44 @@ def camera_acquisition(detector_name, camera_status):
         api("LiveViewController", "stopLiveView", detectorName=detector_name)
 
 
-@pytest.fixture(scope="module")
-def detector_name():
-    """The requested detector, or the first configured one."""
+@pytest.fixture(scope="module", params=["acquisition", "observation"])
+def detector_name(request):
+    """Run every test twice: acquisition detector, then observation camera.
+
+    The observation camera only exists on some rigs, so that parameter skips
+    where the setup has none.
+    """
     detectors = api("SettingsController", "getDetectorNames")
 
     if not detectors:
         pytest.skip("no detector configured")
-    if DETECTOR and DETECTOR not in detectors:
-        pytest.skip(f"detector {DETECTOR!r} not found")
 
-    return DETECTOR or detectors[0]
+    if request.param == "observation":
+        camera = next(
+            (name for name in detectors if is_observation_camera(name)),
+            None,
+        )
+
+        if camera is None:
+            pytest.skip(f"no observation camera in this setup: {detectors}")
+
+        return camera
+
+    if DETECTOR:
+        if DETECTOR not in detectors:
+            pytest.skip(f"detector {DETECTOR!r} not found")
+
+        return DETECTOR
+
+    # The observation camera has its own parameter, so it is not the fallback.
+    acquisition = [
+        name for name in detectors if not is_observation_camera(name)
+    ]
+
+    if not acquisition:
+        pytest.skip("setup has no acquisition detector")
+
+    return acquisition[0]
 
 
 @pytest.fixture
@@ -222,10 +259,18 @@ def test_light_source_is_visible_to_camera(
     take_image,
     image_difference,
     ):
-    """Each LED must change the image by more than the camera noise floor."""
+    """Each LED must change the image by more than the camera noise floor.
+
+    Runs once per camera: the acquisition detector and, where the rig has one,
+    the observation camera.
+    """
     # Before the baseline, never between the two frames: dark and bright have
     # to share one exposure, or the change is partly the exposure changing.
-    auto_exposure(detector_name)
+    #
+    # Acquisition detector only: the pass runs once per session, and the
+    # observation camera has no live stream for it to act on.
+    if not is_observation_camera(detector_name):
+        auto_exposure(detector_name)
 
     dark, noise_floor, required_change = measure_dark_baseline(
         detector_name

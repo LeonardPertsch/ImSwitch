@@ -1,4 +1,5 @@
 """Shared fixtures for the e2e suite: frame capture and photon thresholds."""
+import base64
 import io
 import os
 import time
@@ -51,11 +52,53 @@ def _exposure_ms(detector):
     parameters = response.json().get("parameters") or {}
     return (parameters.get("exposure") or {}).get("value")
 
+def is_observation_camera(detector):
+    """True for the observation camera, which has no acquisition path."""
+    return "observ" in detector.lower()
+
+
+def _snap_observation():
+    """One greyscale frame from the observation camera.
+
+    snapNumpyToFastAPI only serves detectors with forAcquisition=true and
+    answers 500 for this one, so the frame comes from the overview endpoint.
+    Scaled down like the other path, so both cameras are measured at a
+    comparable pixel count and one threshold fits both.
+    """
+    response = requests.post(
+        f"{BASE_URL}/api/ExperimentController/snapOverviewImage",
+        params={"slot_id": "1", "camera_name": "e2e_photon_test"},
+        timeout=60,
+    )
+
+    # 400 means ExperimentController has no overview camera bound, even though
+    # the setup lists a detector whose name looks like one. That is absent
+    # hardware rather than a failure, so it skips like every other such case.
+    if response.status_code == 400:
+        pytest.skip(f"overview camera not available: {response.text}")
+
+    assert response.status_code == 200, response.text
+
+    frame = Image.open(
+        io.BytesIO(base64.b64decode(response.json()["imageBase64"]))
+    ).convert("L")
+
+    return frame.resize(
+        (
+            max(1, int(frame.width * PHOTON_RESIZE)),
+            max(1, int(frame.height * PHOTON_RESIZE)),
+        )
+    )
+
+
 @pytest.fixture(scope="session")
 def take_image():
-    """Capture one greyscale camera frame."""
+    """Capture one greyscale camera frame, from either camera path."""
 
     def run(detector):
+        if is_observation_camera(detector):
+            return _snap_observation()
+
         response = requests.get(
             f"{BASE_URL}/api/RecordingController/snapNumpyToFastAPI",
             params={
