@@ -1,0 +1,57 @@
+name: hardware-e2e
+
+# Manual only, on purpose: this actuates a real microscope (moves the stage,
+# switches lasers and the LED matrix on). No push/PR trigger until the swap
+# mechanism has proven itself over a number of manual runs.
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: >
+          Image to test. A bare tag (e.g. sha-7d3adda) resolves against
+          ghcr.io/openuc2/imswitch; a full ref (repo/image:tag) is used as-is.
+        required: true
+      tests:
+        description: >
+          Space-separated e2e folders to run (e.g. "board firmware"). Empty
+          runs the whole suite, including motor/camera/laser/ledmatrix.
+        required: false
+        default: ""
+
+# One rig, one run: a second dispatch while a run is in flight would fight the
+# first over the container. hil-run.sh also flocks on the Pi itself, so this
+# is a fast-fail at the GitHub level rather than the only guard.
+concurrency:
+  group: hardware-e2e-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  test-on-rig:
+    # This label identifies the physical rig, not just "some self-hosted
+    # runner" -- see imswitch/imcontrol/_test/e2e/ci/README.md for what's
+    # attached to it.
+    runs-on: [self-hosted, uc2-rig]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the e2e suite against the image under test
+        id: hil
+        working-directory: imswitch/imcontrol/_test/e2e
+        run: |
+          ci/hil-run.sh \
+            --image "${{ inputs.image }}" \
+            --yes \
+            --out ci/reports \
+            --tests "${{ inputs.tests }}"
+
+      # Runs even if the step above failed (a red suite or a rig problem) --
+      # a report or a log is exactly what's needed to tell those apart.
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hil-report-${{ inputs.image }}
+          path: imswitch/imcontrol/_test/e2e/ci/reports/
+          if-no-files-found: warn
+          retention-days: 30
