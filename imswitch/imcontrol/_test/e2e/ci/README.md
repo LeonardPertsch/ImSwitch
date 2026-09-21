@@ -38,7 +38,7 @@ call cannot actuate the rig by accident.
 |---|---|
 | 0 | the suite passed |
 | 1 | a test failed |
-| 2 | the run could not be performed at all |
+| 2 | the run could not be performed at all (including a detector that never became ready) |
 
 The 1 / 2 split is what CI reads: a 1 is a finding about the image, a 2 is a
 problem with the rig or the run itself, and only one of those should page
@@ -60,7 +60,13 @@ anyone.
    deployment's own compose files, so the container under test is the
    deployment, with one line changed.
 5. **Waits** until ImSwitch answers, then verifies the container really runs
-   the image under test.
+   the image under test, then **waits for every detector** to deliver a
+   frame. `/api/version` answers as soon as the web server is up, while a
+   camera SDK can still be enumerating behind it — snapping a Hikrobot camera
+   in that window answers 500, which would read as a broken image instead of
+   a rig that is not warm yet. The detector list comes from the setup, and
+   the observation camera is snapped through the overview endpoint, the same
+   distinction `conftest.py` makes.
 6. **Ships the suite** into the container (the image carries no `e2e` folder,
    and a fresh container starts with an empty `/tmp`) and runs pytest with
    `--junitxml`.
@@ -97,6 +103,7 @@ not published on the host. Inside the container the tests use
 | `HIL_CONTAINER_URL` | `http://localhost:8001` | ImSwitch as the tests see it |
 | `HIL_MIN_FREE_GB` | `15` | refuse to pull below this |
 | `HIL_READY_TIMEOUT` | `180` | seconds to wait for ImSwitch after a swap |
+| `HIL_DETECTOR_TIMEOUT` | `300` | seconds to wait per detector for its first frame |
 | `HIL_LOCK_FILE` | `/tmp/hil-run.lock` | one run per rig |
 | `HIL_OVERRIDE_FILE` | `/tmp/hil-override.compose.yml` | the temporary override |
 

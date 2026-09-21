@@ -25,7 +25,8 @@
 #   0  the suite passed
 #   1  a test failed
 #   2  the run could not be performed (bad arguments, no disk, no ImSwitch,
-#      no board, another run in progress, the swap or the restore failed)
+#      no board, a detector that never became ready, another run in progress,
+#      the swap or the restore failed)
 set -uo pipefail
 
 CONTAINER="${IMSWITCH_CONTAINER:-imswitch-server-1}"
@@ -43,6 +44,14 @@ MIN_FREE_GB="${HIL_MIN_FREE_GB:-15}"
 # How long ImSwitch may take to answer after a container swap. It loads the
 # setup file, opens the camera SDK and talks to the ESP32 before serving.
 READY_TIMEOUT="${HIL_READY_TIMEOUT:-180}"
+
+# How long one detector may take to deliver its first frame, counted per
+# detector. Deliberately separate from READY_TIMEOUT: /api/version answers as
+# soon as the web server is up, while a camera SDK can still be enumerating
+# behind it. The Hikrobot camera has needed minutes there, and snapping it in
+# that window answers 500 -- which would look like a broken image rather than
+# a rig that is not warm yet.
+DETECTOR_TIMEOUT="${HIL_DETECTOR_TIMEOUT:-300}"
 
 # One rig, one run. A second run would fight the first over the container.
 LOCK_FILE="${HIL_LOCK_FILE:-/tmp/hil-run.lock}"
@@ -145,8 +154,23 @@ ORIGINAL_IMAGE="$(docker inspect "$CONTAINER" --format '{{.Config.Image}}')"
 COMPOSE_ARGS=(--project-name "$PROJECT" --project-directory "$PKG_DIR")
 IFS=',' read -r -a config_list <<< "$CONFIG_FILES"
 for file in "${config_list[@]}"; do
-    [ -f "$PKG_DIR/$file" ] || die "compose file missing: $PKG_DIR/$file"
-    COMPOSE_ARGS+=(-f "$PKG_DIR/$file")
+    # forklift writes absolute paths into the label; a relative one is meant
+    # against the package directory. Prefixing an absolute path with PKG_DIR
+    # builds something that cannot exist, so decide per entry.
+    case "$file" in
+        /*) config_path="$file" ;;
+        *)  config_path="$PKG_DIR/$file" ;;
+    esac
+
+    # Our own override can still be listed here: compose records the -f list a
+    # container was started with, and a restore that did not have to recreate
+    # the container leaves that entry in the label. It is not part of the
+    # deployment -- the swap adds it again when it is wanted -- and the file is
+    # usually gone, so skip it instead of dying on it.
+    [ "$config_path" = "$OVERRIDE_FILE" ] && continue
+
+    [ -f "$config_path" ] || die "compose file missing: $config_path"
+    COMPOSE_ARGS+=(-f "$config_path")
 done
 
 compose() { docker compose "${COMPOSE_ARGS[@]}" "$@"; }
@@ -240,6 +264,92 @@ log "reports      $running_version"
 
 
 # ---------------------------------------------------------------------------
+# Detector readiness. An answering API is not a ready microscope: the camera
+# tests snap a frame, and a camera still starting up answers 500. Waiting here
+# rather than in the tests keeps the tests honest -- a retry loop inside them
+# would hide a camera that genuinely broke.
+# ---------------------------------------------------------------------------
+
+# Read the detectors from the setup instead of naming them here: which cameras
+# exist depends on the setup file the image under test loads.
+detector_names() {
+    # A JSON array of plain strings, e.g. ["WidefieldCamera","ObservationCamera"].
+    curl -sf -m 15 "$HOST_URL/api/SettingsController/getDetectorNames" 2>/dev/null |
+        tr -d '[]"' | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -v '^$'
+}
+
+# Snap one frame and report only the HTTP status.
+#
+# The suite draws the same distinction in conftest.py (is_observation_camera):
+# snapNumpyToFastAPI serves detectors with forAcquisition=true and answers 500
+# for the observation camera, which has to go through the overview endpoint.
+# Asking the wrong endpoint would wait out the full timeout on a camera that
+# was ready all along.
+detector_snap_code() {
+    local detector="$1"
+
+    case "$(printf '%s' "$detector" | tr '[:upper:]' '[:lower:]')" in
+        *observ*)
+            curl -s -o /dev/null -w '%{http_code}' -m 30 -X POST \
+                "$HOST_URL/api/ExperimentController/snapOverviewImage?slot_id=1&camera_name=hil_ready_check"
+            ;;
+        *)
+            curl -s -o /dev/null -w '%{http_code}' -m 30 -G \
+                --data-urlencode "detectorName=$detector" \
+                --data-urlencode "resizeFactor=0.1" \
+                "$HOST_URL/api/RecordingController/snapNumpyToFastAPI"
+            ;;
+    esac
+}
+
+wait_for_detector() {
+    local detector="$1"
+    local started="$SECONDS"
+    local code=""
+
+    while [ $((SECONDS - started)) -lt "$DETECTOR_TIMEOUT" ]; do
+        code="$(detector_snap_code "$detector")"
+
+        if [ "$code" = "200" ]; then
+            log "detector    $detector ready after $((SECONDS - started))s"
+            return 0
+        fi
+
+        # 400 is the overview endpoint saying no overview camera is bound.
+        # No amount of waiting changes that, and the suite skips those tests
+        # rather than failing them, so it must not hold up the run either.
+        if [ "$code" = "400" ]; then
+            log "detector    $detector: no overview camera bound (400), not waiting"
+            return 0
+        fi
+
+        sleep 5
+    done
+
+    warn "detector    $detector still answers ${code:-nothing} after ${DETECTOR_TIMEOUT}s"
+    return 1
+}
+
+log "waiting for every detector to deliver a frame (up to ${DETECTOR_TIMEOUT}s each)"
+
+DETECTORS="$(detector_names)"
+[ -n "$DETECTORS" ] ||
+    die "ImSwitch reports no detectors -- the camera tests would all skip"
+
+# Every detector is waited out even after one fails, so the log shows how long
+# each of them really took and whether the timeout is set anywhere near right.
+NOT_READY=""
+while IFS= read -r detector; do
+    wait_for_detector "$detector" || NOT_READY="$NOT_READY $detector"
+done <<< "$DETECTORS"
+
+# Exit 2, not 1: a camera that never woke up says nothing about the image, and
+# CI must not page anyone about a red test that never ran.
+[ -z "$NOT_READY" ] ||
+    die "detector(s) not ready within ${DETECTOR_TIMEOUT}s:$NOT_READY -- not running the suite"
+
+
+# ---------------------------------------------------------------------------
 # Ship the suite and run it. The image carries no e2e folder, and a swapped
 # container starts with an empty /tmp, so this happens after the swap.
 # ---------------------------------------------------------------------------
@@ -255,7 +365,7 @@ for folder in $TESTS; do TARGETS="$TARGETS /tmp/e2e/$folder"; done
 [ -z "$TARGETS" ] && TARGETS="/tmp/e2e"
 
 mkdir -p "$OUT_DIR"
-REPORT="$OUT_DIR/junit-${IMAGE##*:}.xml"
+REPORT="$OUT_DIR/junit-${IMAGE##*:}-$(date +%Y-%m-%d_%H-%M-%S).xml"
 
 log "running pytest on:${TARGETS}"
 
