@@ -55,11 +55,18 @@ tar --no-xattrs --format=ustar -czf - -C "$DIR" . | ssh "${SSH_OPTS[@]}" "$PI" "
 SSH_TTY_FLAG="" DOCKER_TTY_FLAG=""
 if [ -t 0 ]; then SSH_TTY_FLAG="-t" DOCKER_TTY_FLAG="-it"; fi
 
-# Park the stage first, so every run starts from the same place. A setup
-# without a positioner makes this fail, which must not cost us the tests.
+# Park the stage and start the camera before pytest. Neither is allowed to
+# cost us the run: a setup without a positioner cannot park, and a camera that
+# refuses to stream is something the tests themselves report better.
+#
+# The live view is what makes the camera deliver frames at all -- the snap
+# endpoint only reads a buffer that an acquisition loop fills.
 ssh $SSH_TTY_FLAG "${SSH_OPTS[@]}" "$PI" "
     docker exec $ENVS $CONTAINER python3 /tmp/e2e/motor/move_to_transport.py ||
         echo 'run_all: transport move failed, running the tests anyway' >&2
+
+    docker exec $ENVS $CONTAINER python3 /tmp/e2e/camera/start_live_view.py ||
+        echo 'run_all: live view not started, the camera tests may fail' >&2
 
     docker exec $DOCKER_TTY_FLAG $ENVS $CONTAINER python3 -m pytest $TARGETS \
         -v -ra --tb=line $COLOR -p no:arkitekt_next -p no:cacheprovider -o markers=hardware

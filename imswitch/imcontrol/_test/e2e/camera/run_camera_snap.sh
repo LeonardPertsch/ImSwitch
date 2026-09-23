@@ -44,11 +44,13 @@ fi
 # Ship the shared conftest.py alongside the test: pytest reads it from the same
 # directory, so both land in one temporary folder. ustar carries no pax
 # headers, so GNU tar on the Pi does not warn about macOS SCHILY.fflags.
-tar --no-xattrs --format=ustar -czf - -C "$DIR/.." conftest.py -C "$DIR" test_camera_capture.py |
+tar --no-xattrs --format=ustar -czf - -C "$DIR/.." conftest.py -C "$DIR" test_camera_capture.py start_live_view.py |
 ssh "$PI" "cat > /tmp/camera_tests.tgz \
     && docker cp /tmp/camera_tests.tgz $CONTAINER:/tmp/ >/dev/null \
     && docker exec $CONTAINER sh -c 'rm -rf /tmp/camera_tests \
         && mkdir -p /tmp/camera_tests \
         && tar xzf /tmp/camera_tests.tgz -C /tmp/camera_tests' \
+    && (docker exec $ENVS $CONTAINER python3 /tmp/camera_tests/start_live_view.py ||
+        echo 'run_camera_snap: live view not started, the tests may fail' >&2) \
     && docker exec $ENVS $CONTAINER python3 -m pytest /tmp/camera_tests \
         -v --tb=line $COLOR -p no:arkitekt_next -o markers=hardware"
