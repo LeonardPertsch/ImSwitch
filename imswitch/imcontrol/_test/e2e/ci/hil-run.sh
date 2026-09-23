@@ -278,28 +278,67 @@ detector_names() {
         tr -d '[]"' | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -v '^$'
 }
 
-# Snap one frame and report only the HTTP status.
-#
 # The suite draws the same distinction in conftest.py (is_observation_camera):
-# snapNumpyToFastAPI serves detectors with forAcquisition=true and answers 500
-# for the observation camera, which has to go through the overview endpoint.
-# Asking the wrong endpoint would wait out the full timeout on a camera that
-# was ready all along.
+# the observation camera is not an acquisition detector and has to be read
+# through the overview endpoint.
+is_observation_camera() {
+    case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+        *observ*) return 0 ;;
+        *)        return 1 ;;
+    esac
+}
+
+# Start the acquisition loop for one camera, once.
+#
+# snapNumpyToFastAPI does not start anything: it reads the newest frame out of
+# a ring buffer that only fills while an acquisition loop runs, waits a second
+# when that buffer is empty, and then answers 500. On the Hikrobot camera the
+# loop is started by the live view, so after a swap the snap keeps answering
+# 500 until something starts one -- which is what the readiness check below
+# would otherwise wait out in full.
+#
+# startLiveView answers 200 even when it declines, so the body decides.
+# "already_running" is as good as "success": the stream is what matters, not
+# who started it. The stream is left running afterwards -- the suite starts its
+# own where it needs one, and the camera is no worse off for it.
+start_live_view() {
+    local detector="$1"
+    local answer code status
+
+    answer="$(curl -s -m 60 -X POST -w $'\n%{http_code}' \
+        "$HOST_URL/api/LiveViewController/startLiveView?detectorName=$detector")"
+
+    code="${answer##*$'\n'}"
+    status="$(printf '%s' "${answer%$'\n'*}" |
+        sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+
+    [ "$code" = "200" ] ||
+        die "startLiveView for $detector answered HTTP ${code:-nothing} -- the camera cannot deliver frames"
+
+    case "$status" in
+        success|already_running)
+            log "detector    $detector live view $status"
+            ;;
+        *)
+            die "startLiveView for $detector reported ${status:-no status} -- the camera would never deliver a frame"
+            ;;
+    esac
+}
+
+# Snap one frame and report only the HTTP status. Asking the wrong endpoint
+# would wait out the full timeout on a camera that was ready all along.
 detector_snap_code() {
     local detector="$1"
 
-    case "$(printf '%s' "$detector" | tr '[:upper:]' '[:lower:]')" in
-        *observ*)
-            curl -s -o /dev/null -w '%{http_code}' -m 30 -X POST \
-                "$HOST_URL/api/ExperimentController/snapOverviewImage?slot_id=1&camera_name=hil_ready_check"
-            ;;
-        *)
-            curl -s -o /dev/null -w '%{http_code}' -m 30 -G \
-                --data-urlencode "detectorName=$detector" \
-                --data-urlencode "resizeFactor=0.1" \
-                "$HOST_URL/api/RecordingController/snapNumpyToFastAPI"
-            ;;
-    esac
+    if is_observation_camera "$detector"; then
+        curl -s -o /dev/null -w '%{http_code}' -m 30 -X POST \
+            "$HOST_URL/api/ExperimentController/snapOverviewImage?slot_id=1&camera_name=hil_ready_check"
+    else
+        curl -s -o /dev/null -w '%{http_code}' -m 30 -G \
+            --data-urlencode "detectorName=$detector" \
+            --data-urlencode "resizeFactor=0.1" \
+            "$HOST_URL/api/RecordingController/snapNumpyToFastAPI"
+    fi
 }
 
 wait_for_detector() {
@@ -340,6 +379,11 @@ DETECTORS="$(detector_names)"
 # each of them really took and whether the timeout is set anywhere near right.
 NOT_READY=""
 while IFS= read -r detector; do
+    # An acquisition camera has to be streaming before it can be snapped at
+    # all; the observation camera is read straight off the device and needs
+    # nothing started.
+    is_observation_camera "$detector" || start_live_view "$detector"
+
     wait_for_detector "$detector" || NOT_READY="$NOT_READY $detector"
 done <<< "$DETECTORS"
 
